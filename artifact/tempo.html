@@ -150,15 +150,19 @@ details.card summary { cursor: pointer; font-weight: 500; }
 
   <!-- IMPORT -->
   <section id="v-import" hidden>
-    <h2>Import from a screenshot</h2>
-    <p class="muted">Timetable, syllabus, email, flyer or group chat. Claude reads it and you check everything before it's added.</p>
+    <h2>Import a screenshot or roster</h2>
+    <p class="muted">A screenshot of a timetable, syllabus, email, flyer or chat, or a work roster as a Word file (.docx). For rosters, Tempo only picks out your shifts. You check everything before it's added.</p>
     <label class="drop" id="drop" for="file">
-      <span id="drop-text">Tap to choose an image, or paste or drop one here</span>
+      <span id="drop-text">Tap to choose an image or a Word roster (.docx), or paste or drop one here</span>
       <img id="preview" alt="Your screenshot" hidden>
     </label>
-    <input type="file" id="file" accept="image/*" hidden>
+    <input type="file" id="file" accept="image/*,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
     <div class="stack" style="margin-top:10px">
-      <input class="input" id="hint" placeholder="Optional note, e.g. “Term 4 timetable, ends 12 Dec”">
+      <div id="roster-row" class="stack" hidden>
+        <label class="small muted" for="rname">Your name as it appears on rosters</label>
+        <input class="input" id="rname" placeholder="e.g. Evan, Evan S. or E. Smith" autocomplete="name">
+      </div>
+      <input class="input" id="hint" placeholder="Optional note, e.g. “Term 4 timetable, ends 12 Dec” or “roster for the cafe”">
       <div class="row"><button class="btn primary" id="extract" disabled>Read events</button><span id="x-status" class="muted small"></span></div>
     </div>
     <div id="extracted" class="stack" style="margin-top:12px"></div>
@@ -362,7 +366,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 // ---------------------------------------------------------------- state
-let db = null, mcp = null, sample = null, uid = null, stateRef = null;
+let db = null, mcp = null, sample = null, uid = null, stateRef = null, myName = "";
 let cals = [], relayCal = null, events = [], relay = [], loadedAt = 0;
 const LOADED = { from: 0, to: 0 };
 const S = {                 // persisted per user (private) in the artifact's db
@@ -1701,8 +1705,20 @@ $("#term-save").addEventListener("click", () => {
 
 // ---------------------------------------------------------------- screenshot import
 let img = null, extracted = [];
+let docFile = null;
+const isDocx = (f) => /\.docx$/i.test(f?.name || "") || f?.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 function setImage(f) {
-  if (!f || !f.type.startsWith("image/")) return;
+  if (!f) return;
+  $("#extracted").innerHTML = ""; extracted = [];
+  if (/\.doc$/i.test(f.name || "")) { $("#x-status").textContent = "That's an older Word file (.doc). Open it in Word or Pages, save it as .docx, then import that."; return; }
+  if (isDocx(f)) {
+    docFile = f; img = null; $("#preview").hidden = true; $("#drop-text").hidden = false; $("#drop-text").textContent = `📄 ${f.name}`;
+    $("#roster-row").hidden = false; if (!$("#rname").value) $("#rname").value = S.settings.rosterName || myName || "";
+    $("#extract").textContent = "Find my shifts"; $("#extract").disabled = !sample;
+    $("#x-status").textContent = sample ? "" : "Claude isn't available on this page."; return;
+  }
+  if (!f.type.startsWith("image/")) { $("#x-status").textContent = "Choose an image or a Word (.docx) file."; return; }
+  docFile = null; $("#roster-row").hidden = true; $("#extract").textContent = "Read events"; $("#drop-text").textContent = "";
   img = f; const p = $("#preview"); p.src = URL.createObjectURL(f); p.hidden = false; $("#drop-text").hidden = true;
   $("#extract").disabled = !sample; $("#extracted").innerHTML = ""; $("#x-status").textContent = sample ? "" : "Claude isn't available on this page.";
 }
@@ -1711,10 +1727,78 @@ const drop = $("#drop");
 drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
 drop.addEventListener("dragleave", () => drop.classList.remove("over"));
 drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); setImage(e.dataTransfer.files[0]); });
-document.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith("image/")); if (f) { openTab("import"); setImage(f); } });
+document.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith("image/") || isDocx(x)); if (f) { openTab("import"); setImage(f); } });
+
+// Word files are read in your browser (mammoth, loaded only when needed); tables keep their rows and columns.
+let mammothP = null;
+function loadMammoth() {
+  if (window.mammoth) return Promise.resolve(window.mammoth);
+  return mammothP ||= new Promise((res, rej) => {
+    const sc = document.createElement("script"); sc.src = "https://cdn.jsdelivr.net/npm/mammoth@1.11.0/mammoth.browser.min.js";
+    sc.onload = () => res(window.mammoth); sc.onerror = () => { mammothP = null; rej(new Error("Couldn't load the Word reader. Check your connection and try again.")); };
+    document.head.appendChild(sc);
+  });
+}
+async function readDocx(file) {
+  const m = await loadMammoth();
+  const { value: html } = await m.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
+  const doc = new DOMParser().parseFromString(html, "text/html"), lines = [], images = [];
+  const cell = (td) => td.textContent.replace(/\s+/g, " ").trim();
+  const walk = (el) => {
+    for (const n of el.children) {
+      if (n.tagName === "TABLE") {
+        lines.push("[table]");
+        for (const tr of n.querySelectorAll("tr")) lines.push([...tr.children].flatMap((td) => Array(Math.min(+td.getAttribute("colspan") || 1, 14)).fill(cell(td))).join(" | "));
+        lines.push("[/table]");
+      } else if (n.tagName === "IMG") images.push(n.getAttribute("src"));
+      else if (/^(P|H\d|LI)$/.test(n.tagName)) { const t = cell(n); if (t) lines.push(t); n.querySelectorAll("img").forEach((i) => images.push(i.getAttribute("src"))); }
+      else walk(n);
+    }
+  };
+  walk(doc.body);
+  // pictures inside the file (a roster pasted in as an image) become Blobs Claude can look at
+  const blobs = images.filter((src) => /^data:image\//.test(src || "")).slice(0, 4).map((src) => {
+    const [head, b64] = src.split(","), bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: head.slice(5).split(";")[0] });
+  });
+  return { text: lines.join("\n"), images: blobs };
+}
+async function importRoster() {
+  const name = $("#rname").value.trim();
+  if (!name) { $("#x-status").textContent = "Type your name as it appears on rosters first."; $("#rname").focus(); return; }
+  if (name !== S.settings.rosterName) { S.settings.rosterName = name; save(); }
+  $("#x-status").innerHTML = `<span class="spin"></span>Opening the roster…`;
+  const doc = await readDocx(docFile);
+  let text = doc.text, cut = false;
+  if (text.length > 180000) { text = text.slice(0, 180000); cut = true; }
+  const pics = text.trim().length < 300 ? doc.images : [];
+  if (!text.trim() && !pics.length) { $("#x-status").textContent = "That document looks empty. If the roster is a picture, take a screenshot of it and import that instead."; return; }
+  const jobs = S.places.filter((p) => p.name && (p.kind === "work" || alsoWork(p))).map((p) => p.name);
+  const hint = $("#hint").value.trim();
+  $("#x-status").innerHTML = `<span class="spin"></span>Finding your shifts…`;
+  const out = await sample.json(
+    `This is a work roster from a Word document${pics.length ? " (the roster itself is in the attached images)" : ""}. The person using this app is "${name}". ` +
+    `Find ONLY their shifts and ignore everyone else's.\n` +
+    `- They may appear by first name, surname, initials, a nickname or a shortened name. If you can't find them, return no events and say so in "note". ` +
+    `If more than one person could be them, return no events and list the possible names in "note".\n` +
+    `- Today is ${new Date().toLocaleString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" })} (${tz}). Work out each shift's real date from the roster ` +
+    `(week-starting dates, day columns, date headings). If a year is missing, use the nearest sensible one, usually this week or later.\n` +
+    `- Use 24-hour HH:MM. A shift that crosses midnight ends the next day. Days off, leave, "OFF", "RDO" and empty cells are not shifts.\n` +
+    `- Title each shift "Shift: <workplace>", adding " (<role or area>)" when the roster gives one.` +
+    (jobs.length ? `\n- Their known workplaces: ${jobs.join(", ")}.` : "") + (hint ? `\n- Their note: ${hint}` : "") +
+    `\nReply with only JSON: {"workplace":"business or site name if shown","matched_as":"how their name appears","events":[{"title":"","start":"YYYY-MM-DDTHH:MM",` +
+    `"end":"YYYY-MM-DDTHH:MM","all_day":false,"location":"","confidence":"high|medium|low"}],"note":"anything ambiguous, or empty"}\n\nRoster:\n${text || "(see images)"}`,
+    { modelTier: "default", cache: false, ...(pics.length ? { images: pics } : {}) });
+  const evs = (Array.isArray(out?.events) ? out.events : []).map((x) => ({ ...x, repeat: "none", is_class: false, all_day: false,
+    title: x.title || `Shift${out.workplace ? `: ${out.workplace}` : ""}`, location: x.location || out.workplace || "" }));
+  const notes = [out?.matched_as && evs.length ? `Found you as “${out.matched_as}”.` : "", out?.note || "", cut ? "The roster was very long, so only the first part was read." : ""];
+  await showExtracted(evs, notes.filter(Boolean).join(" "), "No shifts for you in this roster.");
+}
 
 $("#extract").addEventListener("click", (e) => busy(e.currentTarget, "Reading", async () => {
   try {
+    if (docFile) return await importRoster();
     const terms = currentTerms(), hint = $("#hint").value.trim();
     const out = await sample.json(
       `Extract every calendar-worthy event from this screenshot (a class timetable, syllabus, email, flyer, ticket, or chat).\n` +
@@ -1731,7 +1815,11 @@ $("#extract").addEventListener("click", (e) => busy(e.currentTarget, "Reading", 
       `\nReply with only JSON: {"events":[{"title":"","start":"YYYY-MM-DDTHH:MM or YYYY-MM-DD if all day","end":"same format","all_day":false,"location":"",` +
       `"repeat":"none|weekly|fortnightly","days":["MO"],"week":"A|B|null","is_class":false,"confidence":"high|medium|low"}],"note":"anything ambiguous, or empty"}`,
       { images: [img], modelTier: "default", cache: false });
-    const placed = placeInTerms(Array.isArray(out?.events) ? out.events : []);
+    await showExtracted(Array.isArray(out?.events) ? out.events : [], out?.note || "", "No events found.");
+  } catch (err) { $("#x-status").textContent = err?.code ? sampleMessage(err) : (err?.message || "Something went wrong."); }
+}));
+async function showExtracted(list, note, emptyText) {
+    const placed = placeInTerms(list);
     const merged = mergeWithin(placed.list);
     extracted = merged.list;
     $("#x-status").innerHTML = `<span class="spin"></span>Checking against your calendar…`;
@@ -1742,13 +1830,12 @@ $("#extract").addEventListener("click", (e) => busy(e.currentTarget, "Reading", 
     } catch { checked = false; extracted.forEach((x) => { x.match = { kind: "new" }; }); }
     const c = { new: 0, dup: 0, update: 0, similar: 0 }; extracted.forEach((x) => { c[x.match.kind]++; });
     const bits = [c.new && `${c.new} new`, c.update && `${c.update} to update`, c.similar && `${c.similar} to check`, c.dup && `${c.dup} already in your calendar`].filter(Boolean);
-    $("#x-status").textContent = !extracted.length ? `No events found. ${out?.note || ""}` :
-      `${bits.join(" · ")}.` + (merged.removed ? ` Skipped ${merged.removed} listed twice in the screenshot.` : "") +
+    $("#x-status").textContent = !extracted.length ? `${emptyText} ${note}` :
+      `${bits.join(" · ")}.` + (merged.removed ? ` Skipped ${merged.removed} listed twice.` : "") +
       (checked ? "" : " Couldn't check your calendar for duplicates.") +
-      (placed.noTerms ? " Add your term dates in Insights so classes stop at the end of term." : "") + (out?.note ? ` ${out.note}` : "");
+      (placed.noTerms ? " Add your term dates in Insights so classes stop at the end of term." : "") + (note ? ` ${note}` : "");
     renderExtracted();
-  } catch (err) { $("#x-status").textContent = sampleMessage(err); }
-}));
+}
 function repeatText(x) {
   if (!x.recurrence) return "";
   const u = (x.recurrence.match(/UNTIL=(\d{4})(\d{2})(\d{2})/) || []).slice(1);
@@ -1816,6 +1903,7 @@ function renderExtracted() {
   const [dbNs, userNs, mcpNs, sampleNs] = await Promise.all(["db", "user", "mcp", "sample"].map((n) => window.claude?.use?.(n) ?? Promise.resolve(null)));
   db = dbNs; mcp = mcpNs; sample = sampleNs;
   uid = userNs ? await userNs.id().catch(() => null) : null;
+  myName = userNs ? ((await userNs.me?.().catch(() => null))?.name || "") : "";
   if (db && uid) {
     stateRef = db.doc(`data/users/${uid}/tempo`);
     try {
