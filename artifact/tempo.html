@@ -91,19 +91,42 @@ code { font-size: 13px; background: var(--accent-soft); color: var(--ink); paddi
 .tabs button { flex: 1; border: 0; background: none; color: var(--muted); font: 500 12px var(--body); padding: 9px 0 11px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
 .tabs button svg { width: 22px; height: 22px; }
 .tabs button[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+/* event editor */
+.ev[data-key] { cursor: pointer; } .ev[data-key]:hover { border-color: var(--accent); }
+.cdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
+dialog.sheet { border: 0; padding: 0; margin: auto auto 0; width: 100%; max-width: 560px; max-height: 92%; overflow-y: auto; overscroll-behavior: contain; border-radius: 18px 18px 0 0; background: var(--surface); color: var(--ink); }
+@media (min-width: 620px) { dialog.sheet { margin: auto; border-radius: 18px; } }
+dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
+.sheet-body { display: flex; flex-direction: column; gap: 12px; padding: 14px max(16px, env(safe-area-inset-left, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)); }
+.sheet-head { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--surface); margin: -14px 0 0; padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
+.ed-title { font: 600 20px var(--display); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 6px 2px; background: transparent; }
+.ed-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; }
+.ed-grid label, .ed-field { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+@media (max-width: 420px) { .ed-grid { grid-template-columns: 1fr 1fr; } .ed-grid .date { grid-column: span 2; } }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.sw { width: 28px; height: 28px; border-radius: 50%; border: 0; cursor: pointer; }
+.sw.none { background: var(--bg); border: 1px dashed var(--muted); }
+.sw[aria-pressed="true"] { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ed-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
+.btn.danger { color: var(--bad); }
+.err { color: var(--bad); font-size: 13px; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; z-index: 20; max-width: calc(100% - 32px); font-size: 14px; }
 </style>
 
 <div class="wrap">
   <header class="top">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◷</span>Tempo</div>
-    <button class="btn small" id="refresh">Refresh</button>
+    <div class="row"><button class="btn small" id="refresh">Refresh</button><button class="btn small primary" id="new-ev">+ New</button></div>
   </header>
 
   <div id="banner" class="card notice warn" hidden style="margin-top:12px"></div>
 
   <!-- AGENDA -->
   <section id="v-agenda">
+    <form id="qa" class="row" style="margin-top:12px">
+      <input class="input grow" id="qa-text" placeholder="Quick add, e.g. “Tutoring Thu 4–5pm at library”" aria-label="Quick add an event" autocomplete="off">
+      <button class="btn primary" id="qa-btn">Add</button>
+    </form>
     <div id="checkins" class="stack" style="margin-top:12px"></div>
     <div id="agenda"><div class="empty"><span class="spin"></span>Loading your calendars…</div></div>
   </section>
@@ -228,6 +251,45 @@ code { font-size: 13px; background: var(--accent-soft); color: var(--ink); paddi
   <button role="tab" data-tab="study" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M9 8h6"/></svg>Study</button>
   <button role="tab" data-tab="insights" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Insights</button>
 </nav>
+<dialog class="sheet" id="ed" aria-labelledby="ed-heading">
+  <form class="sheet-body" id="ed-form" method="dialog" novalidate>
+    <div class="sheet-head">
+      <button type="button" class="btn ghost small" id="ed-close">Cancel</button>
+      <strong id="ed-heading">Edit event</strong>
+      <button type="submit" class="btn primary small" id="ed-save">Save</button>
+    </div>
+    <input class="input ed-title" id="ed-title" placeholder="Title" aria-label="Title" autocomplete="off">
+    <div class="row" id="ed-scope-row" hidden>
+      <span class="small muted">Repeating event:</span>
+      <div class="seg" role="group" aria-label="Apply changes to">
+        <button type="button" id="ed-scope-one" aria-pressed="true">This event</button><button type="button" id="ed-scope-all" aria-pressed="false">All events</button>
+      </div>
+    </div>
+    <label class="row small" style="gap:6px"><input type="checkbox" id="ed-allday"> All day</label>
+    <div class="ed-grid">
+      <label class="date">Date<input class="input" type="date" id="ed-date"></label>
+      <label id="ed-start-l">Start<input class="input" type="time" id="ed-start"></label>
+      <label id="ed-end-l">End<input class="input" type="time" id="ed-end"></label>
+      <label id="ed-enddate-l" hidden>Last day<input class="input" type="date" id="ed-enddate"></label>
+    </div>
+    <div class="row" id="ed-nudges">
+      <button type="button" class="btn small" data-nudge="-15">−15 min</button>
+      <button type="button" class="btn small" data-nudge="15">+15 min</button>
+      <button type="button" class="btn small" data-nudge="1440">Next day</button>
+    </div>
+    <p class="small muted" id="ed-series-note" hidden>Changes to all events update the title, place, notes and color. To move times, edit one event at a time.</p>
+    <input class="input" id="ed-loc" placeholder="Location" aria-label="Location" autocomplete="off">
+    <textarea class="input" id="ed-notes" rows="2" placeholder="Notes" aria-label="Notes"></textarea>
+    <div class="ed-field">Color<div class="swatches" id="ed-colors"></div></div>
+    <label class="ed-field" id="ed-cal-l">Calendar<select class="input" id="ed-cal"></select></label>
+    <p class="small muted" id="ed-cal-fixed" hidden></p>
+    <div class="err" id="ed-err" hidden></div>
+    <div class="ed-actions">
+      <button type="button" class="btn" id="ed-dup">Duplicate</button>
+      <button type="button" class="btn danger" id="ed-del">Delete</button>
+    </div>
+  </form>
+</dialog>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -326,7 +388,8 @@ function toEvent(e, cal) {
   const end = allDay ? new Date((e.end?.date || e.start.date) + "T00:00:00").getTime() : Date.parse(e.end?.dateTime || e.start.dateTime);
   if (!Number.isFinite(start)) return null;
   return { id: e.id, start, end: Math.max(end, start), allDay, title: e.summary || "(no title)", location: e.location || "", desc: e.description || "",
-    cal: cal.summary, calId: cal.id, free: e.transparency === "transparent" };
+    cal: cal.summary, calId: cal.id, free: e.transparency === "transparent",
+    color: e.colorId || "", recurringId: e.recurringEventId || "", key: `${cal.id}|${e.id}` };
 }
 
 async function loadCalendars(refresh = false) {
@@ -575,8 +638,8 @@ function render() {
 }
 function evCard(e) {
   const c = catOf(e);
-  return `<div class="ev ${c === "study" ? "study" : ""}"><div class="t">${e.allDay ? "All day" : `${fTime(e.start)}<br>${fTime(e.end)}`}</div>
-    <div class="b"><div class="title">${esc(e.title)}${c ? `<span class="chip">${esc(c.replace(/_/g, " "))}</span>` : ""}</div>
+  return `<div class="ev ${c === "study" ? "study" : ""}" data-key="${esc(e.key)}" role="button" tabindex="0" aria-label="Edit ${esc(e.title)}"><div class="t">${e.allDay ? "All day" : `${fTime(e.start)}<br>${fTime(e.end)}`}</div>
+    <div class="b"><div class="title">${COLORS[e.color] ? `<span class="cdot" style="background:${COLORS[e.color]}"></span>` : ""}${esc(e.title)}${c ? `<span class="chip">${esc(c.replace(/_/g, " "))}</span>` : ""}</div>
     <div class="meta">${e.location ? `${esc(e.location)} · ` : ""}${esc(e.cal)}</div></div></div>`;
 }
 function suggestCard(p, withDate) {
@@ -752,6 +815,190 @@ function openTab(name) {
   window.scrollTo(0, 0);
 }
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => openTab(b.dataset.tab)));
+
+// ---------------------------------------------------------------- event editor
+const COLORS = { "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6bf26", "6": "#f4511e", "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043", "11": "#d50000" };
+const COLOR_NAMES = { "1": "Lavender", "2": "Sage", "3": "Grape", "4": "Flamingo", "5": "Banana", "6": "Tangerine", "7": "Peacock", "8": "Graphite", "9": "Blueberry", "10": "Basil", "11": "Tomato" };
+let ed = null; // { ev | null, scope: "one" | "all", color, armedDelete }
+const dOf = (ms) => localISO(ms).slice(0, 10), tOf = (ms) => localISO(ms).slice(11, 16);
+const addDays = (date, n) => { const d = new Date(date + "T12:00:00"); d.setDate(d.getDate() + n); return dOf(d.getTime()); };
+const writableCals = () => cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
+
+function paintColors() {
+  const canClear = !ed.ev || !ed.ev.color; // Google can't reliably un-color an event, so only offer "default" when nothing is set
+  $("#ed-colors").innerHTML = (canClear ? `<button type="button" class="sw none" data-color="" aria-label="Calendar default" aria-pressed="${!ed.color}"></button>` : "") +
+    Object.entries(COLORS).map(([id, hex]) => `<button type="button" class="sw" data-color="${id}" style="background:${hex}" aria-label="${COLOR_NAMES[id]}" aria-pressed="${ed.color === id}"></button>`).join("");
+}
+function setScope(s) {
+  ed.scope = s;
+  $("#ed-scope-one").setAttribute("aria-pressed", s === "one"); $("#ed-scope-all").setAttribute("aria-pressed", s === "all");
+  const lock = s === "all";
+  for (const id of ["#ed-allday", "#ed-date", "#ed-start", "#ed-end", "#ed-enddate"]) $(id).disabled = lock;
+  document.querySelectorAll("#ed-nudges button").forEach((b) => { b.disabled = lock; });
+  $("#ed-series-note").hidden = !lock; $("#ed-dup").hidden = lock;
+}
+function syncAllDay() {
+  const a = $("#ed-allday").checked;
+  $("#ed-start-l").hidden = a; $("#ed-end-l").hidden = a; $("#ed-enddate-l").hidden = !a;
+  if (a && !$("#ed-enddate").value) $("#ed-enddate").value = $("#ed-date").value;
+}
+/** Open the sheet for an existing event, or a new one prefilled from `preset`. */
+function openEditor(ev, preset = {}) {
+  const base = ev || (() => {
+    const s = Math.ceil((Date.now() + 15 * MIN) / (30 * MIN)) * 30 * MIN;
+    return { title: "", start: s, end: s + HOUR, allDay: false, location: "", desc: "", color: "" };
+  })();
+  ed = { ev, scope: "one", color: preset.color ?? base.color ?? "", armedDelete: false };
+  $("#ed-heading").textContent = ev ? "Edit event" : "New event";
+  $("#ed-title").value = preset.title ?? base.title;
+  $("#ed-allday").checked = preset.allDay ?? base.allDay;
+  $("#ed-date").value = preset.date ?? dOf(base.start);
+  $("#ed-start").value = preset.start ?? tOf(base.start);
+  $("#ed-end").value = preset.end ?? tOf(base.end);
+  $("#ed-enddate").value = preset.endDate ?? (base.allDay ? dOf(base.end - DAY) : dOf(base.start));
+  $("#ed-loc").value = preset.location ?? base.location ?? "";
+  $("#ed-notes").value = preset.notes ?? (ev ? base.desc : "") ?? "";
+  $("#ed-cal").innerHTML = writableCals().map((c) => `<option value="${esc(c.id)}">${esc(c.summary)}</option>`).join("");
+  $("#ed-cal").value = ev ? ev.calId : (S.settings.studyCal || writableCals()[0]?.id || "");
+  $("#ed-cal-l").hidden = !!ev;
+  $("#ed-cal-fixed").hidden = !ev; if (ev) $("#ed-cal-fixed").textContent = `In your ${ev.cal} calendar`;
+  $("#ed-scope-row").hidden = !(ev && ev.recurringId);
+  $("#ed-del").hidden = !ev; $("#ed-del").textContent = "Delete"; $("#ed-dup").hidden = !ev;
+  $("#ed-err").hidden = true;
+  paintColors(); setScope("one"); syncAllDay();
+  $("#ed").showModal();
+  if (!ev) $("#ed-title").focus();
+}
+function readEditor() {
+  const v = { title: $("#ed-title").value.trim() || "(no title)", allDay: $("#ed-allday").checked, date: $("#ed-date").value,
+    location: $("#ed-loc").value.trim(), notes: $("#ed-notes").value, color: ed.color, calId: $("#ed-cal").value };
+  if (!v.date) return { error: "Pick a date." };
+  if (v.allDay) {
+    const last = $("#ed-enddate").value || v.date;
+    if (last < v.date) return { error: "The last day can't be before the first day." };
+    v.startTime = `${v.date}T00:00:00`; v.endTime = `${addDays(last, 1)}T00:00:00`;
+  } else {
+    const s = $("#ed-start").value, e = $("#ed-end").value;
+    if (!s || !e) return { error: "Add a start and end time." };
+    v.startTime = `${v.date}T${s}:00`;
+    v.endTime = e > s ? `${v.date}T${e}:00` : `${addDays(v.date, 1)}T${e}:00`; // an end before the start means it runs past midnight
+  }
+  v.startMs = new Date(v.startTime).getTime(); v.endMs = new Date(v.endTime).getTime();
+  return v;
+}
+function edError(msg) { $("#ed-err").textContent = msg; $("#ed-err").hidden = false; }
+function connectorError(e) {
+  if (e?.code === "tool_error") return "Google Calendar refused that change. You may not own this event, or a field is invalid.";
+  return mcpMessage(e).replace(/<[^>]+>/g, "");
+}
+/** Keep Tempo's study bookkeeping in step when you move or delete one of its sessions. */
+function proposalFor(ev) { return S.proposals.find((p) => p.status === "accepted" && (p.eventId ? p.eventId === ev.id : p.start === ev.start && ev.title === `📚 Study: ${p.subject}`)); }
+async function afterWrite() { await mcp.invalidate(GCAL, "list_events").catch(() => {}); refresh(true); }
+
+$("#ed-close").addEventListener("click", () => $("#ed").close());
+$("#ed-allday").addEventListener("change", syncAllDay);
+$("#ed-scope-one").addEventListener("click", () => setScope("one"));
+$("#ed-scope-all").addEventListener("click", () => setScope("all"));
+$("#ed-colors").addEventListener("click", (e) => { const b = e.target.closest("[data-color]"); if (!b) return; ed.color = b.dataset.color; paintColors(); });
+$("#ed-nudges").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-nudge]"); if (!b) return;
+  const n = +b.dataset.nudge;
+  if (n === 1440 || $("#ed-allday").checked) {
+    const step = n === 1440 ? 1 : 0; if (!step) return;
+    $("#ed-date").value = addDays($("#ed-date").value, 1);
+    if ($("#ed-enddate").value) $("#ed-enddate").value = addDays($("#ed-enddate").value, 1);
+    return;
+  }
+  const shift = (sel) => { const [h, m] = ($(sel).value || "00:00").split(":").map(Number); const t = (h * 60 + m + n + 1440) % 1440; $(sel).value = `${pad(Math.floor(t / 60))}:${pad(t % 60)}`; };
+  shift("#ed-start"); shift("#ed-end");
+});
+$("#ed-dup").addEventListener("click", () => {
+  const v = readEditor(); const src = ed.ev;
+  $("#ed").close();
+  openEditor(null, { title: v.title || src.title, allDay: v.allDay, date: v.date, start: $("#ed-start").value, end: $("#ed-end").value,
+    endDate: $("#ed-enddate").value, location: v.location, notes: v.notes, color: v.color });
+  $("#ed-cal").value = src.calId;
+});
+$("#ed-del").addEventListener("click", (e) => {
+  const b = e.currentTarget, ev = ed.ev; if (!ev) return;
+  const series = ed.scope === "all" && ev.recurringId;
+  if (!ed.armedDelete) { ed.armedDelete = true; b.textContent = series ? "Tap again to delete every event" : "Tap again to delete"; return; }
+  busy(b, "Deleting", async () => {
+    try {
+      await gcal("delete_event", { calendarId: ev.calId, eventId: series ? ev.recurringId : ev.id });
+      events = events.filter((x) => series ? x.recurringId !== ev.recurringId : x.key !== ev.key);
+      const p = proposalFor(ev); if (p) { p.status = "rejected"; save(); }
+      $("#ed").close(); render(); toast(series ? "Deleted the whole series" : "Event deleted");
+      afterWrite();
+    } catch (err) { edError(connectorError(err)); ed.armedDelete = false; }
+  });
+});
+$("#ed-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const v = readEditor(); if (v.error) return edError(v.error);
+  busy($("#ed-save"), "Saving", async () => {
+    try {
+      const ev = ed.ev;
+      if (!ev) {
+        await gcal("create_event", { calendarId: v.calId || undefined, summary: v.title, startTime: v.startTime, endTime: v.endTime, allDay: v.allDay,
+          location: v.location || undefined, description: v.notes || undefined, colorId: v.color || undefined });
+        const cal = cals.find((c) => c.id === v.calId) || { summary: "", id: v.calId };
+        events.push({ id: "pending-" + newId(), key: "pending|" + newId(), start: v.startMs, end: v.endMs, allDay: v.allDay, title: v.title, location: v.location, desc: v.notes,
+          cal: cal.summary, calId: cal.id, free: false, color: v.color, recurringId: "" });
+        events.sort((a, b) => a.start - b.start);
+        toast("Event added");
+      } else {
+        const series = ed.scope === "all" && ev.recurringId;
+        const input = { calendarId: ev.calId, eventId: series ? ev.recurringId : ev.id };
+        if (v.title !== ev.title) input.summary = v.title;
+        if (v.location !== (ev.location || "")) input.location = v.location;
+        if (v.notes !== (ev.desc || "")) input.description = v.notes;
+        if (v.color && v.color !== (ev.color || "")) input.colorId = v.color;
+        const timeChanged = !series && (v.allDay !== ev.allDay || v.startMs !== ev.start || v.endMs !== ev.end);
+        if (timeChanged) { input.startTime = v.startTime; input.endTime = v.endTime; if (v.allDay !== ev.allDay || v.allDay) input.allDay = v.allDay; }
+        if (Object.keys(input).length === 2) { $("#ed").close(); return; }
+        await gcal("update_event", input);
+        const targets = series ? events.filter((x) => x.recurringId === ev.recurringId) : [ev];
+        for (const x of targets) {
+          x.title = v.title; x.location = v.location; x.desc = v.notes; x.color = v.color;
+          if (timeChanged) { x.start = v.startMs; x.end = v.endMs; x.allDay = v.allDay; }
+        }
+        const p = proposalFor(ev);
+        if (p && timeChanged) { p.start = v.startMs; p.end = v.endMs; save(); }
+        events.sort((a, b) => a.start - b.start);
+        toast(series ? "Updated every event in the series" : "Saved");
+      }
+      $("#ed").close(); render(); afterWrite();
+    } catch (err) { edError(connectorError(err)); }
+  });
+});
+$("#agenda").addEventListener("click", (e) => {
+  const card = e.target.closest(".ev[data-key]"); if (!card) return;
+  const ev = events.find((x) => x.key === card.dataset.key); if (ev && !ev.key.startsWith("pending|")) openEditor(ev);
+});
+$("#agenda").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".ev[data-key]")) { e.preventDefault(); e.target.click(); } });
+$("#new-ev").addEventListener("click", () => { if (!mcp) return toast("Connect Google Calendar first."); openEditor(null); });
+
+// quick add: Claude turns a phrase into a prefilled editor you confirm
+$("#qa").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = $("#qa-text").value.trim(); if (!text) return;
+  if (!mcp) return toast("Connect Google Calendar first.");
+  if (!sample) { openEditor(null, { title: text }); return; }
+  busy($("#qa-btn"), "", async () => {
+    try {
+      const r = await sample.json(
+        `Turn this into one calendar event. Now: ${new Date().toLocaleString([], { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${tz}).\n` +
+        `Text: ${JSON.stringify(text)}\nIf no time is given, make it all day. If only a start is given, make it 1 hour. Resolve weekdays to the next upcoming one.\n` +
+        `Reply with only JSON: {"title":"","date":"YYYY-MM-DD","start":"HH:MM or empty","end":"HH:MM or empty","location":""}`,
+        { modelTier: "quick", cache: false });
+      const timed = /^\d{2}:\d{2}$/.test(r?.start || "");
+      openEditor(null, { title: r?.title || text, date: /^\d{4}-\d{2}-\d{2}$/.test(r?.date || "") ? r.date : undefined, allDay: !timed,
+        start: timed ? r.start : undefined, end: /^\d{2}:\d{2}$/.test(r?.end || "") ? r.end : undefined, endDate: r?.date, location: r?.location || "" });
+      $("#qa-text").value = "";
+    } catch (err) { toast(sampleMessage(err), 4000); openEditor(null, { title: text }); }
+  });
+});
 
 // ---------------------------------------------------------------- screenshot import
 let img = null, extracted = [];
