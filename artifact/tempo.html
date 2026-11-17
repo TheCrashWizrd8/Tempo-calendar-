@@ -232,8 +232,17 @@ details.card summary { cursor: pointer; font-weight: 500; }
           <li><b>Test it.</b> Tap ▶ in the shortcut, wait about a minute for it to sync, then tap <b>Check now</b> above.</li>
           <li><b>Make it run by itself.</b> Shortcuts → <b>Automation</b> → <b>+</b>. For each trigger choose <b>Run Immediately</b> and the action <b>Run Shortcut → Tempo ping</b>:
             <ul>
-              <li><b>Time of Day, 10 minutes after your events start.</b> iPhones can't start a shortcut when a calendar event begins, so Tempo works out the times from your calendar. Make one automation per line below: choose the time, <b>Weekly</b>, and tick the days shown.
-                <div id="checkin-times" class="stack small" style="margin-top:6px"></div>
+              <li><b>Exactly 10 minutes after each event starts</b> (recommended). iPhones can't run a shortcut when an event begins, but they can when an email arrives. Tempo adds a tiny “Tempo check-in” to your hidden calendar 10 minutes into each event, Google emails you at that minute, and the email runs your shortcut.
+                <ol style="padding-left:18px;margin:6px 0">
+                  <li><label class="row" style="gap:6px"><input type="checkbox" id="ci-on"> Schedule a check-in 10 minutes into every event</label><div id="ci-status" class="small muted"></div></li>
+                  <li>Make sure your Gmail account is in the iPhone <b>Mail</b> app (Settings → Apps → Mail → Mail Accounts).</li>
+                  <li>Shortcuts → <b>Automation</b> → <b>+</b> → <b>Email</b>. Sender: <code>calendar-notification@google.com</code>. Subject contains: <code>Tempo check-in</code>. Choose <b>Run Immediately</b>, then the action <b>Run Shortcut → Tempo ping</b>.</li>
+                  <li>Optional: in Gmail, filter those emails to mark them as read so they don't pile up.</li>
+                </ol>
+                <details style="margin-top:6px"><summary class="small">Prefer fixed weekly times instead?</summary>
+                  <p class="small muted">Make one <b>Time of Day</b> automation per line: choose the time, <b>Weekly</b>, and tick the days shown.</p>
+                  <div id="checkin-times" class="stack small"></div>
+                </details>
               </li>
               <li><b>App → Is Opened</b> (optional, extra samples): choose a few apps you use every day.</li>
             </ul>
@@ -576,7 +585,7 @@ function buildModel() {
   const blur = (g) => g.map((r) => r.map((v, h) => 0.6 * v + 0.2 * (r[h - 1] || 0) + 0.2 * (r[h + 1] || 0)));
   const sb = blur(study), mx = Math.max(0.25, ...sb.flat());
   const outcomes = {}; for (const p of S.proposals) outcomes[p.status] = (outcomes[p.status] || 0) + 1;
-  const lastPing = Math.max(0, ...relay.map((e) => e.start).filter((t) => t <= now + HOUR));
+  const lastPing = Math.max(0, ...pings.map((p) => p.ts), ...marks.map((m) => m.ts));
   model = { study: sb.map((r) => r.map((v) => v / mx)), busy, pref, why, visits, weeks: +weeks.toFixed(1), pings: pings.length + marks.length, past: past.length, outcomes, lastPing, trips: learnTrips(visits) };
 }
 function topWhy(d, h) { return Object.entries(model.why[d][h]).sort((a, b) => b[1] - a[1])[0]?.[0]; }
@@ -771,7 +780,7 @@ function renderInsights() {
     : `<p class="muted small">No places yet. They appear after you've spent time somewhere on two different days.</p>`;
   const ls = $("#loc-status");
   if (!relayCal) { ls.className = "status"; ls.textContent = "Not set up. Start with step 1 of the guide."; }
-  else if (!relay.length) { ls.className = "status"; ls.textContent = "Found your “Tempo location” calendar. Waiting for your phone's first update."; }
+  else if (!model.pings) { ls.className = "status"; ls.textContent = "Found your “Tempo location” calendar. Waiting for your phone's first update."; }
   else { ls.className = "status ok"; ls.textContent = `Location learning is on. Last update ${ago(model.lastPing)}, ${model.pings} in the last 8 weeks.`; }
   const st = S.settings;
   $("#s-len").value = st.sessionMinutes; $("#s-max").value = st.maxPerDay; $("#s-early").value = st.earliestHour; $("#s-late").value = st.latestHour;
@@ -791,14 +800,15 @@ async function busy(btn, label, fn) {
 async function refresh(force) {
   try {
     await loadCalendars(force); await loadData(force);
-    banner(""); render(); renderMoveCals();
+    banner(""); render(); renderMoveCals(); paintCheckins();
+    if (S.settings.checkins) syncCheckins();
   } catch (e) {
     banner(mcpMessage(e));
     if (!events.length) $("#agenda").innerHTML = `<div class="empty">Your calendar will show here once Google Calendar is connected.</div>`;
   }
 }
 $("#refresh").addEventListener("click", (e) => busy(e.currentTarget, "Refreshing", () => refresh(true)));
-$("#check-loc").addEventListener("click", (e) => busy(e.currentTarget, "Checking", async () => { await refresh(true); toast(relay.length ? `Last update ${ago(model.lastPing)}` : "No location updates found yet"); }));
+$("#check-loc").addEventListener("click", (e) => busy(e.currentTarget, "Checking", async () => { await refresh(true); toast(model.pings ? `Last update ${ago(model.lastPing)}` : "No location updates found yet"); }));
 
 document.addEventListener("click", async (ev) => {
   const b = ev.target.closest("[data-act]"); if (!b) return;
@@ -1403,6 +1413,68 @@ $("#move-go").addEventListener("click", (ev) => {
     });
     await afterWrite();
   }).then(renderMoveCals);
+});
+
+
+// ---------------------------------------------------------------- check-ins 10 minutes into every event
+// A tiny event in the hidden calendar at start + 10 min with an email reminder at that minute;
+// the email triggers the iPhone automation that runs "Tempo ping".
+const CI = "Tempo check-in";
+let ciRunning = false, ciInfo = null;
+async function syncCheckins() {
+  if (!S.settings.checkins || !relayCal || !mcp || ciRunning) return;
+  ciRunning = true;
+  try {
+    const now = Date.now(), horizon = now + 14 * DAY, want = new Map();
+    for (const e of events) {
+      if (e.allDay || e.free || /^Tempo check-in/.test(e.title)) continue;
+      const t = e.start + 10 * MIN;
+      if (t > now + MIN && e.start < horizon && !want.has(t)) want.set(t, e.title);
+    }
+    const have = (await listAll(relayCal.id, now, horizon + DAY, true, 20)).filter((e) => (e.summary || "").startsWith(CI));
+    const keep = new Map(), stale = [];
+    for (const e of have) { const t = Date.parse(e.start?.dateTime); if (want.has(t) && !keep.has(t)) keep.set(t, e); else stale.push(e); }
+    let ops = 0, failed = 0;
+    for (const e of stale) { if (ops++ >= 40) break; await gcal("delete_event", { calendarId: relayCal.id, eventId: e.id, notificationLevel: "NONE" }).catch(() => { failed++; }); }
+    for (const [t, title] of [...want].sort((a, b) => a[0] - b[0])) {
+      if (keep.has(t)) continue; if (ops++ >= 40) break;
+      await gcal("create_event", { calendarId: relayCal.id, summary: `${CI}: ${title}`, startTime: localISO(t), endTime: localISO(t + MIN),
+        availability: "AVAILABILITY_FREE", useDefaultReminders: false, overrideReminders: [{ method: "email", minutes: 0 }] }).catch(() => { failed++; });
+    }
+    const next = [...want.entries()].sort((a, b) => a[0] - b[0])[0];
+    ciInfo = { count: want.size, next, failed, more: ops > 40 };
+  } catch (e) { ciInfo = { error: connectorError(e) }; }
+  finally { ciRunning = false; paintCheckins(); }
+}
+async function clearCheckins() {
+  if (!relayCal) return;
+  const now = Date.now();
+  for (const e of (await listAll(relayCal.id, now, now + 30 * DAY, true, 20)).filter((x) => (x.summary || "").startsWith(CI))) {
+    await gcal("delete_event", { calendarId: relayCal.id, eventId: e.id, notificationLevel: "NONE" }).catch(() => {});
+  }
+}
+function paintCheckins() {
+  const box = $("#ci-on"), st = $("#ci-status"); if (!box) return;
+  box.checked = !!S.settings.checkins;
+  if (!relayCal) { box.disabled = true; st.textContent = "Make the “Tempo location” calendar first (step 1)."; return; }
+  box.disabled = false;
+  if (!S.settings.checkins) { st.textContent = ""; return; }
+  if (ciRunning || !ciInfo) { st.textContent = "Scheduling…"; return; }
+  if (ciInfo.error) { st.textContent = `Couldn't schedule check-ins: ${ciInfo.error}`; return; }
+  const n = ciInfo.next;
+  st.textContent = `${ciInfo.count} check-ins scheduled for the next two weeks` + (n ? `. Next: ${n[1]} at ${fShort(n[0])}, ${fTime(n[0])}` : "") +
+    (ciInfo.failed ? `. ${ciInfo.failed} couldn't be updated.` : ".") + (ciInfo.more ? " More will be added next time you open Tempo." : "") +
+    " Open Tempo at least once every two weeks to keep them coming.";
+}
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "ci-on") return;
+  const on = e.target.checked;
+  S.settings.checkins = on; save(); ciInfo = null; paintCheckins();
+  (on ? syncCheckins() : clearCheckins().then(paintCheckins)).catch(() => {});
+  pushUndo(on ? "Check-ins turned on" : "Check-ins turned off and removed", async () => {
+    S.settings.checkins = !on; save(); ciInfo = null; paintCheckins();
+    await (!on ? syncCheckins() : clearCheckins().then(paintCheckins));
+  });
 });
 
 // ---------------------------------------------------------------- school terms & fortnightly timetables
