@@ -110,13 +110,26 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
 .ed-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
 .btn.danger { color: var(--bad); }
 .err { color: var(--bad); font-size: 13px; }
+.toast { display: flex; gap: 14px; align-items: center; }
+.toast-undo { background: none; border: 0; padding: 0; color: inherit; font: 600 14px var(--body); text-decoration: underline; cursor: pointer; }
+.drive { font-size: 12px; color: var(--muted); margin: -2px 0 6px 86px; }
+.drive.tight { color: rgb(var(--busy)); font-weight: 600; }
+.badge { font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 8px; }
+.badge.new { background: var(--accent-soft); color: var(--accent); }
+.badge.ok { background: var(--bg); color: var(--muted); }
+.badge.upd { background: var(--accent-soft); color: var(--ink); }
+.badge.warn { background: rgba(var(--busy), .14); color: rgb(var(--busy)); }
+details.card summary { cursor: pointer; font-weight: 500; }
+.term { display: grid; grid-template-columns: 1.2fr 1fr 1fr .9fr auto; gap: 8px; align-items: end; }
+.term label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+@media (max-width: 560px) { .term { grid-template-columns: 1fr 1fr; padding-bottom: 10px; border-bottom: 1px solid var(--line); } .term .tname { grid-column: span 2; } }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; z-index: 20; max-width: calc(100% - 32px); font-size: 14px; }
 </style>
 
 <div class="wrap">
   <header class="top">
     <div class="brand"><span class="brand-mark" aria-hidden="true">◷</span>Tempo</div>
-    <div class="row"><button class="btn small" id="refresh">Refresh</button><button class="btn small primary" id="new-ev">+ New</button></div>
+    <div class="row"><button class="btn small" id="undo-btn" disabled title="Nothing to undo">↶ Undo</button><button class="btn small" id="refresh" aria-label="Refresh">↻</button><button class="btn small primary" id="new-ev">+ New</button></div>
   </header>
 
   <div id="banner" class="card notice warn" hidden style="margin-top:12px"></div>
@@ -127,6 +140,10 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
       <input class="input grow" id="qa-text" placeholder="Quick add, e.g. “Tutoring Thu 4–5pm at library”" aria-label="Quick add an event" autocomplete="off">
       <button class="btn primary" id="qa-btn">Add</button>
     </form>
+    <div class="row" style="margin-top:10px">
+      <span class="small muted">This week is</span>
+      <div class="seg" role="group" aria-label="Current fortnight week"><button type="button" data-wk="A" aria-pressed="false">Week A</button><button type="button" data-wk="B" aria-pressed="false">Week B</button></div>
+    </div>
     <div id="checkins" class="stack" style="margin-top:12px"></div>
     <div id="agenda"><div class="empty"><span class="spin"></span>Loading your calendars…</div></div>
   </section>
@@ -230,6 +247,15 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
       </div>
     </div>
 
+    <h3>School terms</h3>
+    <div class="card stack">
+      <p class="small muted">Imported classes repeat only inside these dates, and fortnightly timetables line up with Week A and Week B.</p>
+      <div class="row"><span class="small muted">This week is</span>
+        <div class="seg" role="group" aria-label="Current fortnight week"><button type="button" data-wk="A" aria-pressed="false">Week A</button><button type="button" data-wk="B" aria-pressed="false">Week B</button></div></div>
+      <div id="terms" class="stack"></div>
+      <div class="row"><button class="btn small" id="term-add" type="button">Add term</button><button class="btn small primary" id="term-save" type="button">Save terms</button></div>
+    </div>
+
     <h3>Preferences</h3>
     <form id="settings" class="card settings">
       <label>Session length (minutes)<input class="input" id="s-len" type="number" min="15" step="15"></label>
@@ -239,6 +265,7 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
       <label>Gap around events (minutes)<input class="input" id="s-buf" type="number" min="0" step="5"></label>
       <label>Add study sessions to<select class="input" id="s-cal"></select></label>
       <label class="wide">Subjects (comma separated)<input class="input" id="s-subjects" placeholder="Maths, Physics, English"></label>
+      <label class="wide">Where you usually study (used for drive times)<input class="input" id="s-place" list="place-list" placeholder="Home"><datalist id="place-list"></datalist></label>
       <fieldset class="wide" style="border:0;padding:0;margin:0"><legend class="small muted" style="margin-bottom:4px">Calendars to learn from</legend><div id="s-cals" class="row"></div></fieldset>
       <div class="wide"><button class="btn primary">Save preferences</button></div>
     </form>
@@ -290,7 +317,7 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
     </div>
   </form>
 </dialog>
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" role="status" hidden><span id="toast-msg"></span><button class="toast-undo" id="toast-undo" hidden>Undo</button></div>
 
 <script>
 (() => {
@@ -311,16 +338,18 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 // ---------------------------------------------------------------- state
 let db = null, mcp = null, sample = null, uid = null, stateRef = null;
 let cals = [], relayCal = null, events = [], relay = [], loadedAt = 0;
+const LOADED = { from: 0, to: 0 };
 const S = {                 // persisted per user (private) in the artifact's db
-  settings: { sessionMinutes: 60, maxPerDay: 2, earliestHour: 8, latestHour: 22, bufferMinutes: 15, subjects: [], studyCal: "", learnCals: null },
+  settings: { sessionMinutes: 60, maxPerDay: 2, earliestHour: 8, latestHour: 22, bufferMinutes: 15, subjects: [], studyCal: "", learnCals: null, studyPlace: "", terms: [], weekAnchor: null },
   places: [],               // {id, name, kind, lat?, lng?, guessed}
   titleCats: {},            // event title -> category (learned by Claude)
+  travel: {},               // "place a|place b" -> minutes (estimated; -1 = unknown)
   proposals: [],            // {id, start, end, subject, reason, status, eventId}
 };
 
-function toast(msg, ms = 3000) {
-  const t = $("#toast"); t.textContent = msg; t.hidden = false;
-  clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, ms);
+function toast(msg, ms = 3000, undoable = false) {
+  const t = $("#toast"); $("#toast-msg").textContent = msg; $("#toast-undo").hidden = !undoable; t.hidden = false;
+  clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, undoable ? Math.max(ms, 7000) : ms);
 }
 function banner(html) { const b = $("#banner"); b.innerHTML = html; b.hidden = !html; }
 
@@ -403,6 +432,7 @@ async function loadCalendars(refresh = false) {
 
 async function loadData(refresh = false) {
   const from = Date.now() - 56 * DAY, to = Date.now() + 21 * DAY;
+  LOADED.from = from; LOADED.to = to;
   const use = cals.filter((c) => S.settings.learnCals.includes(c.id));
   const lists = await Promise.all(use.map((c) => listAll(c.id, from, to, refresh).then((evs) => evs.map((e) => toEvent(e, c)).filter(Boolean))));
   events = lists.flat().sort((a, b) => a.start - b.start);
@@ -523,7 +553,7 @@ function buildModel() {
   const sb = blur(study), mx = Math.max(0.25, ...sb.flat());
   const outcomes = {}; for (const p of S.proposals) outcomes[p.status] = (outcomes[p.status] || 0) + 1;
   const lastPing = Math.max(0, ...relay.map((e) => e.start).filter((t) => t <= now + HOUR));
-  model = { study: sb.map((r) => r.map((v) => v / mx)), busy, pref, why, visits, weeks: +weeks.toFixed(1), pings: pings.length + marks.length, past: past.length, outcomes, lastPing };
+  model = { study: sb.map((r) => r.map((v) => v / mx)), busy, pref, why, visits, weeks: +weeks.toFixed(1), pings: pings.length + marks.length, past: past.length, outcomes, lastPing, trips: learnTrips(visits) };
 }
 function topWhy(d, h) { return Object.entries(model.why[d][h]).sort((a, b) => b[1] - a[1])[0]?.[0]; }
 function score(a, b) {
@@ -540,7 +570,9 @@ function score(a, b) {
 }
 function candidates(days) {
   const st = S.settings, dur = st.sessionMinutes * MIN, buf = st.bufferMinutes * MIN, step = 30 * MIN;
-  const busyIv = events.filter((e) => !e.allDay && !e.free && e.end > Date.now()).map((e) => [e.start, e.end])
+  const home = studyPlace();
+  const busyIv = events.filter((e) => !e.allDay && !e.free && e.end > Date.now())
+    .map((e) => { const t = e.location ? travelMin(home, e.location) || 0 : 0; return [e.start - t * MIN, e.end + t * MIN]; })
     .concat(S.proposals.filter((p) => p.status === "accepted" && p.end > Date.now()).map((p) => [p.start, p.end]));
   const all = [];
   for (let t = Math.ceil((Date.now() + 30 * MIN) / step) * step; t + dur <= Date.now() + days * DAY; t += step) {
@@ -634,7 +666,7 @@ async function namePlaces() {
 // ---------------------------------------------------------------- rendering
 function render() {
   buildModel();
-  renderAgenda(); renderStudy(); renderInsights();
+  renderAgenda(); renderStudy(); renderInsights(); paintWeek();
 }
 function evCard(e) {
   const c = catOf(e);
@@ -656,11 +688,17 @@ function renderAgenda() {
     <div class="muted small">${esc(slotLabel(p.start, p.end))}</div>
     <div class="row" style="margin-top:8px"><button class="btn primary small" data-act="done">Yes</button><button class="btn small" data-act="skipped">I skipped it</button></div></div>`).join("");
   if (!items.length) { $("#agenda").innerHTML = `<div class="empty">Nothing in the next two weeks.<br>Import a screenshot, or plan some study time.</div>`; return; }
-  let html = "", cur = "";
+  let html = sample && pendingPairs().length ? `<div class="row small muted" style="margin-top:12px">Some drive times between your events aren't known yet.<button class="link" id="est-drive">Estimate them</button></div>` : "";
+  let cur = "", prev = null;
   for (const it of items) {
     const k = lp(it.t).key;
-    if (k !== cur) { cur = k; const rel = k === today ? "Today" : k === lp(now + DAY).key ? "Tomorrow" : ""; html += `<div class="day">${esc(fDay(it.t))}${rel ? `<span class="rel">${rel}</span>` : ""}</div>`; }
-    html += it.k === "e" ? evCard(it.e) : suggestCard(it.p, false);
+    if (k !== cur) {
+      cur = k; prev = null;
+      const rel = k === today ? "Today" : k === lp(now + DAY).key ? "Tomorrow" : "", wk = (S.settings.terms || []).length && !termFor(k) ? null : weekOf(k);
+      html += `<div class="day">${esc(fDay(it.t))}${rel ? `<span class="rel">${rel}</span>` : ""}${wk ? `<span class="rel">Week ${wk}</span>` : ""}</div>`;
+    }
+    if (it.k === "e") { html += driveRow(prev, it.e) + evCard(it.e); if (!it.e.allDay) prev = it.e; }
+    else html += suggestCard(it.p, false);
   }
   $("#agenda").innerHTML = html;
 }
@@ -695,6 +733,8 @@ function renderInsights() {
   const st = S.settings;
   $("#s-len").value = st.sessionMinutes; $("#s-max").value = st.maxPerDay; $("#s-early").value = st.earliestHour; $("#s-late").value = st.latestHour;
   $("#s-buf").value = st.bufferMinutes; $("#s-subjects").value = st.subjects.join(", ");
+  $("#s-place").value = st.studyPlace || ""; $("#s-place").placeholder = studyPlace();
+  $("#place-list").innerHTML = S.places.filter((p) => p.name).map((p) => `<option value="${esc(p.name)}"></option>`).join("");
   const writable = cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
   $("#s-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === st.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
   $("#s-cals").innerHTML = cals.filter((c) => c !== relayCal).map((c, i) => `<label class="row small" style="gap:6px;color:var(--ink)"><input type="checkbox" id="lc-${i}" value="${esc(c.id)}" ${st.learnCals.includes(c.id) ? "checked" : ""}>${esc(c.summary)}</label>`).join("");
@@ -727,20 +767,26 @@ document.addEventListener("click", async (ev) => {
       try {
         const r = await gcal("create_event", { calendarId: S.settings.studyCal || undefined, summary: `📚 Study: ${p.subject}`, startTime: localISO(p.start), endTime: localISO(p.end),
           description: `Planned by Tempo. ${p.reason}`, colorId: "2" });
-        p.status = "accepted"; p.eventId = r?.id ?? r?.event?.id ?? null; save();
-        toast("Added to Google Calendar");
+        p.status = "accepted"; p.eventId = idOf(r); save();
+        const calId = S.settings.studyCal || cals.find((c) => c.primary)?.id, title = `📚 Study: ${p.subject}`;
+        pushUndo("Study session added", async () => { await deleteCreated(calId, p.eventId, title, p.start); p.status = "proposed"; p.eventId = null; save(); render(); });
         await mcp.invalidate(GCAL, "list_events").catch(() => {});
         await refresh(true);
       } catch (e) { toast(e?.code === "tool_error" ? "Google Calendar refused that event." : mcpMessage(e).replace(/<[^>]+>/g, ""), 5000); }
     });
-  } else if (act === "reject") { p.status = "rejected"; save(); render(); toast("Got it. Tempo will avoid that time."); }
-  else if (act === "done" || act === "skipped") { p.status = act === "done" ? "completed" : "skipped"; save(); render(); toast(act === "done" ? "Nice. Noted." : "Noted. Tempo will adjust."); }
+  } else if (act === "reject" || act === "done" || act === "skipped") {
+    const was = p.status;
+    p.status = act === "reject" ? "rejected" : act === "done" ? "completed" : "skipped"; save(); render();
+    pushUndo(act === "reject" ? "Suggestion removed. Tempo will avoid that time." : act === "done" ? "Nice. Marked as done." : "Noted as skipped.", async () => { p.status = was; save(); render(); });
+  }
 });
 
 $("#plan").addEventListener("click", (e) => busy(e.currentTarget, "Planning", async () => {
   if (!sample) return toast("Claude isn't available on this page.");
   try {
+    const before = snapshotS();
     await categorise().catch(() => 0);
+    await estimateTravel().catch(() => 0);
     buildModel();
     const days = +$("#days").value, cand = candidates(days);
     S.proposals = S.proposals.filter((p) => p.status !== "proposed");
@@ -767,35 +813,41 @@ $("#plan").addEventListener("click", (e) => busy(e.currentTarget, "Planning", as
     }
     $("#plan-summary").hidden = false; $("#plan-summary").textContent = plan?.summary || `${chosen.length} sessions suggested.`;
     save(); render();
+    pushUndo(`${chosen.length} sessions suggested`, async () => { restoreS(before); $("#plan-summary").hidden = true; });
   } catch (err) { toast(sampleMessage(err), 5000); }
 }));
 
 $("#learn").addEventListener("click", (e) => busy(e.currentTarget, "Learning", async () => {
   if (!sample) return toast("Claude isn't available on this page.");
   try {
+    const before = snapshotS();
     const n = await categorise(); buildModel(); await namePlaces(); render();
     $("#learn-status").textContent = `Sorted ${n} new event types.`;
+    pushUndo("Learning updated", async () => restoreS(before));
   } catch (err) { toast(sampleMessage(err), 5000); }
 }));
 
 $("#places").addEventListener("click", (e) => {
   const b = e.target.closest("[data-pact]"); if (!b) return;
   const id = b.closest("[data-place]").dataset.place, pl = S.places.find((x) => x.id === id); if (!pl) return;
-  if (b.dataset.pact === "save") { pl.name = $(`#pn-${id}`).value.trim(); pl.kind = $(`#pk-${id}`).value; pl.guessed = false; toast("Saved"); }
-  else if (b.dataset.pact === "del") {
-    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to forget"; return; }
-    S.places = S.places.filter((x) => x.id !== id); toast("Place forgotten");
-  }
+  if (b.dataset.pact === "del" && b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to forget"; return; }
+  const before = snapshotS();
+  if (b.dataset.pact === "save") { pl.name = $(`#pn-${id}`).value.trim(); pl.kind = $(`#pk-${id}`).value; pl.guessed = false; }
+  else S.places = S.places.filter((x) => x.id !== id);
   save(); render();
+  pushUndo(b.dataset.pact === "save" ? "Place saved" : "Place forgotten", async () => restoreS(before));
 });
 
 $("#settings").addEventListener("submit", (e) => {
   e.preventDefault();
+  const before = snapshotS();
   const st = S.settings, num = (sel, d) => { const v = Number($(sel).value); return Number.isFinite(v) && $(sel).value !== "" ? v : d; };
   st.sessionMinutes = num("#s-len", 60); st.maxPerDay = num("#s-max", 2); st.earliestHour = num("#s-early", 8); st.latestHour = num("#s-late", 22); st.bufferMinutes = num("#s-buf", 15);
   st.subjects = $("#s-subjects").value.split(",").map((s) => s.trim()).filter(Boolean);
   st.studyCal = $("#s-cal").value; st.learnCals = [...document.querySelectorAll("#s-cals input:checked")].map((i) => i.value);
-  save(); toast("Preferences saved"); refresh(false);
+  st.studyPlace = $("#s-place").value.trim();
+  save(); refresh(false);
+  pushUndo("Preferences saved", async () => { restoreS(before); refresh(false); });
 });
 
 // guide
@@ -815,6 +867,208 @@ function openTab(name) {
   window.scrollTo(0, 0);
 }
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => openTab(b.dataset.tab)));
+
+// ---------------------------------------------------------------- undo
+const undoStack = [];
+function pushUndo(label, fn) {
+  undoStack.push({ label, fn }); if (undoStack.length > 25) undoStack.shift();
+  updateUndoBtn(); toast(label, 7000, true);
+}
+function updateUndoBtn() {
+  const b = $("#undo-btn"), top = undoStack[undoStack.length - 1];
+  b.disabled = !top; b.title = top ? `Undo: ${top.label}` : "Nothing to undo";
+}
+let undoing = false;
+async function undoLast() {
+  if (undoing) return; const u = undoStack.pop(); updateUndoBtn(); if (!u) return;
+  undoing = true; $("#toast").hidden = true;
+  try { await u.fn(); toast(`Undone: ${u.label}`); }
+  catch (e) { toast(e?.code ? `Couldn't undo: ${connectorError(e)}` : `Couldn't undo. ${e?.message || ""}`, 6000); }
+  finally { undoing = false; }
+}
+const snapshotS = () => JSON.stringify({ settings: S.settings, places: S.places, proposals: S.proposals, titleCats: S.titleCats, travel: S.travel });
+function restoreS(json) { Object.assign(S, JSON.parse(json)); save(); render(); }
+const idOf = (r) => r?.id ?? r?.event?.id ?? r?.eventId ?? null;
+function recreateInput(ev) {
+  return { calendarId: ev.calId, summary: ev.title, allDay: ev.allDay,
+    startTime: ev.allDay ? `${dOf(ev.start)}T00:00:00` : localISO(ev.start), endTime: ev.allDay ? `${dOf(ev.end)}T00:00:00` : localISO(ev.end),
+    location: ev.location || undefined, description: ev.desc || undefined, colorId: ev.color || undefined };
+}
+function seriesInput(m, ev) {
+  const e = m?.event || m, rec = e?.recurrence;
+  if (!Array.isArray(rec) || !rec.length || !e?.start) throw new Error("The whole series can't be brought back, only single events.");
+  const allDay = !!e.start.date;
+  return { calendarId: ev.calId, summary: e.summary || ev.title, allDay, recurrenceData: rec,
+    startTime: allDay ? `${e.start.date}T00:00:00` : localISO(Date.parse(e.start.dateTime)),
+    endTime: allDay ? `${e.end.date}T00:00:00` : localISO(Date.parse(e.end.dateTime)),
+    location: e.location || undefined, description: e.description || undefined, colorId: e.colorId || undefined };
+}
+/** Remove an event Tempo created. If Google didn't hand back its id, find it by calendar, title and start. */
+async function deleteCreated(calId, id, title, startMs, noRefresh) {
+  let eid = id;
+  if (!eid) {
+    const c = cals.find((x) => x.id === calId) || { id: calId, summary: "" };
+    const hit = (await listAll(calId, startMs - HOUR, startMs + 2 * HOUR, true)).map((e) => toEvent(e, c)).filter(Boolean)
+      .find((e) => e.title === title && Math.abs(e.start - startMs) < MIN);
+    if (!hit) throw new Error("Tempo couldn't find that event to remove it.");
+    eid = hit.recurringId || hit.id;
+  }
+  await gcal("delete_event", { calendarId: calId, eventId: eid });
+  if (!noRefresh) await afterWrite();
+}
+
+// ---------------------------------------------------------------- drive time
+function norm(t) { return String(t || "").toLowerCase().replace(/📚\s*study:\s*/g, "").replace(/[^a-z0-9]+/g, " ").trim(); }
+function pairKey(a, b) { const x = norm(a), y = norm(b); return x < y ? `${x}|${y}` : `${y}|${x}`; }
+const placeByLoc = (s) => { const n = norm(s); return n ? S.places.find((p) => p.name && norm(p.name) === n) : null; };
+function studyPlace() {
+  if (S.settings.studyPlace) return S.settings.studyPlace;
+  const hrs = {}; for (const v of model?.visits || []) if (v.place.name && (STUDY_KINDS.has(v.place.kind) || v.place.kind === "home")) hrs[v.place.name] = (hrs[v.place.name] || 0) + v.end - v.start;
+  return Object.entries(hrs).sort((a, b) => b[1] - a[1])[0]?.[0] || "Home";
+}
+/** Minutes between two locations: your own measured trips first, then saved estimates, then straight-line distance between known places. */
+function travelMin(a, b) {
+  if (!a || !b) return null;
+  if (norm(a) === norm(b)) return 0;
+  const k = pairKey(a, b);
+  if (model?.trips?.[k] != null) return model.trips[k];
+  if (S.travel[k] != null) return S.travel[k] < 0 ? null : S.travel[k];
+  const pa = placeByLoc(a), pb = placeByLoc(b);
+  if (pa?.lat != null && pb?.lat != null) return Math.round((dist(pa, pb) / 1000 / 30) * 60 + 5);
+  return null;
+}
+/** Learn real door-to-door times from your location history: leave place A, arrive at place B. */
+function learnTrips(visits) {
+  const vs = visits.slice().sort((a, b) => a.start - b.start), trips = {};
+  for (let i = 1; i < vs.length; i++) {
+    const a = vs[i - 1], b = vs[i];
+    if (a.place.id === b.place.id || !a.place.name || !b.place.name) continue;
+    const m = (b.start - a.end) / MIN;
+    if (m > 2 && m < 120) (trips[pairKey(a.place.name, b.place.name)] ||= []).push(m);
+  }
+  // samples are sparse, so the true trip is at the short end of what we observed
+  return Object.fromEntries(Object.entries(trips).map(([k, v]) => [k, Math.round(v.sort((x, y) => x - y)[Math.floor(v.length / 4)])]));
+}
+function pendingPairs() {
+  const now = Date.now(), soon = events.filter((e) => !e.allDay && e.location && e.end > now - HOUR && e.start < now + 14 * DAY).sort((a, b) => a.start - b.start);
+  const out = new Map();
+  const add = (a, b) => { if (!a || !b || norm(a) === norm(b)) return; const k = pairKey(a, b); if (travelMin(a, b) == null && S.travel[k] == null) out.set(k, [a, b]); };
+  for (let i = 1; i < soon.length; i++) { const a = soon[i - 1], b = soon[i]; if (lp(a.start).key === lp(b.start).key && b.start - a.end < 4 * HOUR) add(a.location, b.location); }
+  const sp = studyPlace(); for (const e of soon) add(sp, e.location);
+  return [...out.values()];
+}
+async function estimateTravel() {
+  if (!sample) return 0;
+  const pairs = pendingPairs().slice(0, 40); if (!pairs.length) return 0;
+  const known = S.places.filter((p) => p.name).map((p) => `${p.name} (${p.kind}${p.lat != null ? `, ${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}` : ""})`).join("; ");
+  const r = await sample.json(
+    `Estimate typical door-to-door travel minutes (driving, or walking if very close) between pairs of locations from a student's calendar. Time zone: ${tz}.\n` +
+    `The student's known places: ${known || "none named yet"}. "${studyPlace()}" is where they usually study.\n` +
+    `Rooms or buildings clearly on the same campus (like "S18" and "C1") are 0-5 minutes apart. If a location is too vague to judge, use null.\n` +
+    `Pairs:\n${pairs.map((p, i) => `${i + 1}. ${p[0]} -> ${p[1]}`).join("\n")}\n` +
+    `Reply with only JSON mapping each pair number to minutes, e.g. {"1": 12, "2": null}.`, { modelTier: "quick" });
+  pairs.forEach((p, i) => { const v = r?.[String(i + 1)]; S.travel[pairKey(p[0], p[1])] = v !== null && v !== undefined && Number.isFinite(+v) ? Math.max(0, Math.round(+v)) : -1; });
+  save(); return pairs.length;
+}
+function driveRow(a, b) {
+  if (!a || !b || !a.location || !b.location) return "";
+  const t = travelMin(a.location, b.location); if (!t) return "";
+  const gap = Math.round((b.start - a.end) / MIN), tight = t > gap;
+  return `<div class="drive ${tight ? "tight" : ""}">About ${t} min to get from ${esc(a.location)} to ${esc(b.location)}${tight ? (gap <= 0 ? ", but these overlap" : `, but only ${gap} min between`) : ""}</div>`;
+}
+/** A warning if an event at `loc` leaves too little time to travel from the one before or to the one after. */
+function travelWarning(startMs, endMs, loc, skipKey) {
+  if (!loc) return "";
+  const day = lp(startMs).key, same = events.filter((e) => !e.allDay && e.key !== skipKey && e.location && lp(e.start).key === day);
+  const before = same.filter((e) => e.end <= startMs).sort((a, b) => b.end - a.end)[0], after = same.filter((e) => e.start >= endMs).sort((a, b) => a.start - b.start)[0];
+  const t1 = before && travelMin(before.location, loc), t2 = after && travelMin(loc, after.location);
+  if (t1 && t1 > (startMs - before.end) / MIN) return ` · Heads up: about ${t1} min from ${before.title}`;
+  if (t2 && t2 > (after.start - endMs) / MIN) return ` · Heads up: about ${t2} min to ${after.title}`;
+  return "";
+}
+
+// ---------------------------------------------------------------- duplicate detection for imports
+function lev(a, b) {
+  const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) { let prev = d[0]; d[0] = i; for (let j = 1; j <= b.length; j++) { const t = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; } }
+  return d[b.length];
+}
+/** "Maths" = "MATHS" = "Mathematics" = "Maths (Yr 11)". */
+function sameTitle(a, b) {
+  const x = norm(a), y = norm(b); if (!x || !y) return false; if (x === y) return true;
+  if (Math.min(x.length, y.length) >= 4 && (x.startsWith(y) || y.startsWith(x) || x.slice(0, 4) === y.slice(0, 4))) return true;
+  const A = new Set(x.split(" ")), B = new Set(y.split(" ")), both = [...A].filter((w) => B.has(w)).length;
+  return both / Math.max(A.size, B.size) >= 0.6 || 1 - lev(x, y) / Math.max(x.length, y.length) >= 0.8;
+}
+const BYDAY = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
+function parseLocal(s) { s = String(s || "").trim(); if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s += "T00:00"; const t = new Date(s.slice(0, 16)).getTime(); return Number.isFinite(t) ? t : NaN; }
+/** The first few weeks of times an extracted event happens (repeating classes expanded). */
+function occurrencesOf(x) {
+  const allDay = !!x.all_day || /^\d{4}-\d{2}-\d{2}$/.test(String(x.start || "").trim());
+  const s = parseLocal(x.start); if (!Number.isFinite(s)) return { allDay, list: [] };
+  const out = [s], r = String(x.recurrence || "");
+  if (/FREQ=(WEEKLY|DAILY)/i.test(r)) {
+    const um = r.match(/UNTIL=(\d{4})(\d{2})(\d{2})/), until = um ? new Date(+um[1], +um[2] - 1, +um[3], 23, 59).getTime() : Infinity;
+    const days = ((r.match(/BYDAY=([A-Z,]+)/i) || [])[1] || "").split(",").map((d) => BYDAY[d.toUpperCase()]).filter((d) => d != null);
+    const daily = /FREQ=DAILY/i.test(r), first = new Date(s).getDay(), d = new Date(s);
+    const interval = Math.max(1, +((r.match(/INTERVAL=(\d+)/i) || [])[1] || 1)), mon0 = mondayOf(dOf(s));
+    for (let i = 1; i <= 13; i++) { // one full fortnight is enough to recognise a class
+      d.setDate(d.getDate() + 1); if (d.getTime() > until) break;
+      if (!daily && interval > 1 && weeksBetween(mon0, mondayOf(dOf(d.getTime()))) % interval !== 0) continue;
+      if (daily || (days.length ? days.includes(d.getDay()) : d.getDay() === first)) out.push(d.getTime());
+    }
+  }
+  return { allDay, list: out };
+}
+/** Drop events the screenshot itself lists twice (e.g. one row per day AND a weekly rule). */
+function mergeWithin(list) {
+  const out = []; let removed = 0;
+  for (const x of list) {
+    const ox = occurrencesOf(x);
+    const twin = out.find((y) => sameTitle(y.title, x.title) && (() => { const oy = occurrencesOf(y); return ox.list.length && ox.list.every((t) => oy.list.some((u) => Math.abs(u - t) <= 10 * MIN)); })());
+    if (twin) { removed++; if (!twin.location && x.location) twin.location = x.location; continue; }
+    out.push(x);
+  }
+  return { list: out, removed };
+}
+/** Everything already in your calendars around the imported dates. */
+async function poolFor(occs) {
+  const all = occs.flatMap((o) => o.list); if (!all.length) return events;
+  const a = Math.min(...all) - DAY, b = Math.min(Math.max(...all) + DAY, Date.now() + 180 * DAY);
+  if (a >= LOADED.from && b <= LOADED.to) return events;
+  const ids = new Set([...S.settings.learnCals, S.settings.studyCal]);
+  const extra = await Promise.all(cals.filter((c) => ids.has(c.id) && c !== relayCal).map((c) => listAll(c.id, a, b, false).then((l) => l.map((e) => toEvent(e, c)).filter(Boolean))));
+  const seen = new Set(events.map((e) => e.key));
+  return events.concat(extra.flat().filter((e) => !seen.has(e.key)));
+}
+function classify(x, occ, pool) {
+  const n = occ.list.length; if (!n) return { kind: "new" };
+  let strong = 0, slot = 0, strongEv = null, slotEv = null;
+  for (const t of occ.list) {
+    let s = null, o = null;
+    for (const e of pool) {
+      if (e.allDay !== occ.allDay) continue;
+      if (occ.allDay ? lp(e.start).key !== lp(t).key : Math.abs(e.start - t) > 10 * MIN) continue;
+      if (sameTitle(e.title, x.title)) { s = e; break; } else o = o || e;
+    }
+    if (s) { strong++; strongEv = strongEv || s; } else if (o) { slot++; slotEv = slotEv || o; }
+  }
+  const half = Math.ceil(n / 2);
+  if (strong >= half) {
+    const nl = String(x.location || "").trim(), ol = String(strongEv.location || "").trim();
+    return nl && norm(nl) !== norm(ol) ? { kind: "update", ev: strongEv, from: ol, to: nl } : { kind: "dup", ev: strongEv };
+  }
+  if (slot >= half) return { kind: "similar", ev: slotEv, why: "same time" };
+  const t0 = occ.list[0];
+  const moved = !occ.allDay && pool.find((e) => !e.allDay && lp(e.start).key === lp(t0).key && sameTitle(e.title, x.title));
+  return moved ? { kind: "similar", ev: moved, why: "different time" } : { kind: "new" };
+}
+function matchBadge(m) {
+  if (m.kind === "dup") return `<div class="wide badge ok">Already in your ${esc(m.ev.cal)} calendar</div>`;
+  if (m.kind === "update") return `<div class="wide badge upd">Already there, but the place changed: ${esc(m.from || "none")} → ${esc(m.to)}. Tempo will update it.</div>`;
+  if (m.kind === "similar") return `<div class="wide badge warn">${m.why === "same time" ? `Same time as “${esc(m.ev.title)}”` : `“${esc(m.ev.title)}” is already on this day at ${fTime(m.ev.start)}`}. Tick to add it anyway.</div>`;
+  return `<div class="wide badge new">New</div>`;
+}
 
 // ---------------------------------------------------------------- event editor
 const COLORS = { "1": "#7986cb", "2": "#33b679", "3": "#8e24aa", "4": "#e67c73", "5": "#f6bf26", "6": "#f4511e", "7": "#039be5", "8": "#616161", "9": "#3f51b5", "10": "#0b8043", "11": "#d50000" };
@@ -925,10 +1179,17 @@ $("#ed-del").addEventListener("click", (e) => {
   if (!ed.armedDelete) { ed.armedDelete = true; b.textContent = series ? "Tap again to delete every event" : "Tap again to delete"; return; }
   busy(b, "Deleting", async () => {
     try {
+      const master = series ? await gcal("get_event", { calendarId: ev.calId, eventId: ev.recurringId }).catch(() => null) : null;
       await gcal("delete_event", { calendarId: ev.calId, eventId: series ? ev.recurringId : ev.id });
       events = events.filter((x) => series ? x.recurringId !== ev.recurringId : x.key !== ev.key);
       const p = proposalFor(ev); if (p) { p.status = "rejected"; save(); }
-      $("#ed").close(); render(); toast(series ? "Deleted the whole series" : "Event deleted");
+      const gone = { ...ev };
+      $("#ed").close(); render();
+      pushUndo(series ? "Deleted the whole series" : "Event deleted", async () => {
+        await gcal("create_event", series ? seriesInput(master, gone) : recreateInput(gone));
+        if (p) { p.status = "accepted"; p.eventId = null; save(); }
+        await afterWrite();
+      });
       afterWrite();
     } catch (err) { edError(connectorError(err)); ed.armedDelete = false; }
   });
@@ -940,13 +1201,13 @@ $("#ed-form").addEventListener("submit", (e) => {
     try {
       const ev = ed.ev;
       if (!ev) {
-        await gcal("create_event", { calendarId: v.calId || undefined, summary: v.title, startTime: v.startTime, endTime: v.endTime, allDay: v.allDay,
+        const r = await gcal("create_event", { calendarId: v.calId || undefined, summary: v.title, startTime: v.startTime, endTime: v.endTime, allDay: v.allDay,
           location: v.location || undefined, description: v.notes || undefined, colorId: v.color || undefined });
         const cal = cals.find((c) => c.id === v.calId) || { summary: "", id: v.calId };
         events.push({ id: "pending-" + newId(), key: "pending|" + newId(), start: v.startMs, end: v.endMs, allDay: v.allDay, title: v.title, location: v.location, desc: v.notes,
           cal: cal.summary, calId: cal.id, free: false, color: v.color, recurringId: "" });
         events.sort((a, b) => a.start - b.start);
-        toast("Event added");
+        pushUndo("Event added" + (v.allDay ? "" : travelWarning(v.startMs, v.endMs, v.location)), () => deleteCreated(v.calId, idOf(r), v.title, v.startMs));
       } else {
         const series = ed.scope === "all" && ev.recurringId;
         const input = { calendarId: ev.calId, eventId: series ? ev.recurringId : ev.id };
@@ -957,6 +1218,13 @@ $("#ed-form").addEventListener("submit", (e) => {
         const timeChanged = !series && (v.allDay !== ev.allDay || v.startMs !== ev.start || v.endMs !== ev.end);
         if (timeChanged) { input.startTime = v.startTime; input.endTime = v.endTime; if (v.allDay !== ev.allDay || v.allDay) input.allDay = v.allDay; }
         if (Object.keys(input).length === 2) { $("#ed").close(); return; }
+        const undoIn = { calendarId: input.calendarId, eventId: input.eventId };
+        if ("summary" in input) undoIn.summary = ev.title;
+        if ("location" in input) undoIn.location = ev.location || "";
+        if ("description" in input) undoIn.description = ev.desc || "";
+        if ("colorId" in input && ev.color) undoIn.colorId = ev.color;
+        if (timeChanged) Object.assign(undoIn, { startTime: ev.allDay ? `${dOf(ev.start)}T00:00:00` : localISO(ev.start), endTime: ev.allDay ? `${dOf(ev.end)}T00:00:00` : localISO(ev.end), allDay: ev.allDay });
+        const linked = proposalFor(ev), linkedWas = linked && { start: linked.start, end: linked.end };
         await gcal("update_event", input);
         const targets = series ? events.filter((x) => x.recurringId === ev.recurringId) : [ev];
         for (const x of targets) {
@@ -966,17 +1234,28 @@ $("#ed-form").addEventListener("submit", (e) => {
         const p = proposalFor(ev);
         if (p && timeChanged) { p.start = v.startMs; p.end = v.endMs; save(); }
         events.sort((a, b) => a.start - b.start);
-        toast(series ? "Updated every event in the series" : "Saved");
+        pushUndo((series ? "Updated every event in the series" : "Saved") + (timeChanged && !v.allDay ? travelWarning(v.startMs, v.endMs, v.location, ev.key) : ""), async () => {
+          await gcal("update_event", undoIn);
+          if (linked) { Object.assign(linked, linkedWas); save(); }
+          await afterWrite();
+        });
       }
       $("#ed").close(); render(); afterWrite();
     } catch (err) { edError(connectorError(err)); }
   });
 });
 $("#agenda").addEventListener("click", (e) => {
+  const est = e.target.closest("#est-drive");
+  if (est) { busy(est, "", async () => { try { const n = await estimateTravel(); render(); toast(n ? "Drive times updated" : "Nothing to estimate"); } catch (err) { toast(sampleMessage(err), 5000); } }); return; }
   const card = e.target.closest(".ev[data-key]"); if (!card) return;
   const ev = events.find((x) => x.key === card.dataset.key); if (ev && !ev.key.startsWith("pending|")) openEditor(ev);
 });
 $("#agenda").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".ev[data-key]")) { e.preventDefault(); e.target.click(); } });
+$("#undo-btn").addEventListener("click", undoLast);
+$("#toast-undo").addEventListener("click", undoLast);
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z" && !e.target.closest("input, textarea, select")) { e.preventDefault(); undoLast(); }
+});
 $("#new-ev").addEventListener("click", () => { if (!mcp) return toast("Connect Google Calendar first."); openEditor(null); });
 
 // quick add: Claude turns a phrase into a prefilled editor you confirm
@@ -1000,6 +1279,104 @@ $("#qa").addEventListener("submit", (e) => {
   });
 });
 
+// ---------------------------------------------------------------- school terms & fortnightly timetables
+const DAY_CODES = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+const DAY_NAMES = { MO: "Mon", TU: "Tue", WE: "Wed", TH: "Thu", FR: "Fri", SA: "Sat", SU: "Sun" };
+function mondayOf(date) { const d = new Date(date + "T12:00:00"); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return dOf(d.getTime()); }
+function weeksBetween(monA, monB) { return Math.round((new Date(monB + "T12:00:00") - new Date(monA + "T12:00:00")) / (7 * DAY)); }
+/** Week A or B for a date inside a term, counting from the term's first week. */
+function weekLetter(term, date) { const k = weeksBetween(mondayOf(term.start), mondayOf(date)); return (k % 2 === 0) === (term.firstWeek !== "B") ? "A" : "B"; }
+/** Week A/B for any date: from its term if it has one, else from the week you last set. */
+function anchorWeek(date) {
+  const a = S.settings.weekAnchor; if (!a) return null;
+  const k = weeksBetween(a.monday, mondayOf(date)); return (k % 2 === 0) === (a.letter !== "B") ? "A" : "B";
+}
+function weekOf(date) {
+  const term = termFor(date); if (term) return weekLetter(term, date);
+  const a = S.settings.weekAnchor; if (!a) return null;
+  const k = weeksBetween(a.monday, mondayOf(date)); return (k % 2 === 0) === (a.letter !== "B") ? "A" : "B";
+}
+function paintWeek() {
+  const cur = weekOf(dOf(Date.now()));
+  document.querySelectorAll("[data-wk]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.wk === cur));
+}
+function setWeek(letter) {
+  const today = dOf(Date.now()), before = snapshotS(), term = termFor(today);
+  if (term) { const k = weeksBetween(mondayOf(term.start), mondayOf(today)); term.firstWeek = (k % 2 === 0) ? letter : (letter === "A" ? "B" : "A"); }
+  S.settings.weekAnchor = { monday: mondayOf(today), letter };
+  termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms();
+  save(); render(); paintWeek();
+  pushUndo(`This week is now Week ${letter}`, async () => { restoreS(before); termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms(); paintWeek(); });
+}
+document.addEventListener("click", (e) => { const b = e.target.closest("[data-wk]"); if (b && b.getAttribute("aria-pressed") !== "true") setWeek(b.dataset.wk); });
+const termFor = (date) => (S.settings.terms || []).find((t) => t.start && t.end && date >= t.start && date <= t.end);
+function currentTerms() { const today = dOf(Date.now()); return (S.settings.terms || []).filter((t) => t.start && t.end && t.end >= today).sort((a, b) => a.start.localeCompare(b.start)); }
+function utcStamp(ms) { return new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""); }
+function rruleFor(x, untilMs) {
+  const p = ["FREQ=WEEKLY"]; if (x.repeat === "fortnightly") p.push("INTERVAL=2", "WKST=MO");
+  p.push("BYDAY=" + x.days.join(",")); if (untilMs) p.push("UNTIL=" + utcStamp(untilMs));
+  return "RRULE:" + p.join(";");
+}
+const timeOf = (s) => (String(s || "").match(/T(\d{2}:\d{2})/) || [])[1];
+/** Repeating classes become one series per term: first lesson on the right day (and week, for fortnightly timetables), last one on the final day of term. */
+function placeInTerms(list) {
+  const terms = currentTerms(), today = dOf(Date.now()), out = []; let noTerms = false;
+  for (const raw of list) {
+    const x = { ...raw, repeat: ["weekly", "fortnightly"].includes(raw.repeat) ? raw.repeat : "none" };
+    x.days = (Array.isArray(raw.days) ? raw.days : []).map((d) => String(d).slice(0, 2).toUpperCase()).filter((d) => DAY_CODES.includes(d));
+    if (x.repeat === "none" || x.all_day) { x.recurrence = null; out.push(x); continue; }
+    const st = timeOf(x.start), en = timeOf(x.end) || st;
+    if (!x.days.length) { const t = parseLocal(x.start); if (Number.isFinite(t)) x.days = [DAY_CODES[new Date(t).getDay()]]; }
+    if (!st || !x.days.length) { x.recurrence = null; out.push(x); continue; }
+    x.week = x.repeat === "fortnightly" ? (String(x.week || "").toUpperCase().startsWith("B") ? "B" : "A") : null;
+    if (!terms.length || raw.is_class === false) {
+      if (raw.is_class !== false) noTerms = true;
+      if (x.repeat === "fortnightly" && S.settings.weekAnchor) {
+        let d = today;
+        for (let i = 0; i < 14; i++, d = addDays(d, 1)) if (x.days.includes(DAY_CODES[new Date(d + "T12:00:00").getDay()]) && weekOf(d) === x.week) { x.start = `${d}T${st}`; x.end = `${d}T${en}`; break; }
+      }
+      x.recurrence = rruleFor(x, null); out.push(x); continue;
+    }
+    for (const term of terms) {
+      let d = term.start > today ? term.start : today, found = null;
+      for (let i = 0; i < 21 && d <= term.end; i++, d = addDays(d, 1)) {
+        const wd = DAY_CODES[new Date(d + "T12:00:00").getDay()];
+        if (x.days.includes(wd) && (x.repeat === "weekly" || weekLetter(term, d) === x.week)) { found = d; break; }
+      }
+      if (!found) continue;
+      out.push({ ...x, start: `${found}T${st}`, end: `${found}T${en}`, term: term.name || "Term",
+        recurrence: rruleFor(x, new Date(`${term.end}T23:59:59`).getTime()) });
+    }
+  }
+  return { list: out, noTerms };
+}
+let termDraft = [];
+function renderTerms() {
+  $("#terms").innerHTML = termDraft.length ? termDraft.map((t, i) => `<div class="term">
+      <label class="tname">Name<input class="input" id="tn-${i}" value="${esc(t.name)}"></label>
+      <label>Starts<input class="input" type="date" id="ts-${i}" value="${esc(t.start)}"></label>
+      <label>Ends<input class="input" type="date" id="te-${i}" value="${esc(t.end)}"></label>
+      <label>First week<select class="input" id="tw-${i}"><option value="" ${!t.firstWeek ? "selected" : ""}>Match this week</option><option value="A" ${t.firstWeek === "A" ? "selected" : ""}>Week A</option><option value="B" ${t.firstWeek === "B" ? "selected" : ""}>Week B</option></select></label>
+      <button type="button" class="btn small ghost" data-term-del="${i}">Remove</button></div>`).join("")
+    : `<p class="small muted">No terms yet. Add each term's first and last day of classes.</p>`;
+}
+function readTerms() { termDraft = termDraft.map((t, i) => ({ name: $(`#tn-${i}`).value.trim() || `Term ${i + 1}`, start: $(`#ts-${i}`).value, end: $(`#te-${i}`).value, firstWeek: $(`#tw-${i}`).value })); }
+$("#term-add").addEventListener("click", () => {
+  readTerms(); const last = termDraft[termDraft.length - 1];
+  termDraft.push({ name: `Term ${termDraft.length + 1}`, start: last?.end ? addDays(last.end, 15) : "", end: "", firstWeek: "" }); renderTerms();
+});
+$("#terms").addEventListener("click", (e) => { const b = e.target.closest("[data-term-del]"); if (!b) return; readTerms(); termDraft.splice(+b.dataset.termDel, 1); renderTerms(); });
+$("#term-save").addEventListener("click", () => {
+  readTerms();
+  const bad = termDraft.find((t) => !t.start || !t.end || t.end < t.start);
+  if (bad) return toast(`Check ${bad.name}: it needs a first day and a last day after it.`, 5000);
+  const before = snapshotS();
+  for (const t of termDraft) if (!t.firstWeek) t.firstWeek = anchorWeek(t.start) || "A"; // "Match this week" follows the A/B switch
+  S.settings.terms = termDraft.slice().sort((a, b) => a.start.localeCompare(b.start));
+  termDraft = S.settings.terms.map((t) => ({ ...t })); save(); renderTerms(); render();
+  pushUndo("Term dates saved", async () => { restoreS(before); termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms(); });
+});
+
 // ---------------------------------------------------------------- screenshot import
 let img = null, extracted = [];
 function setImage(f) {
@@ -1016,53 +1393,99 @@ document.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.file
 
 $("#extract").addEventListener("click", (e) => busy(e.currentTarget, "Reading", async () => {
   try {
+    const terms = currentTerms(), hint = $("#hint").value.trim();
     const out = await sample.json(
-      `Extract every calendar-worthy event from this screenshot (it may be a class timetable, syllabus, email, flyer, ticket, or chat).\n` +
+      `Extract every calendar-worthy event from this screenshot (a class timetable, syllabus, email, flyer, ticket, or chat).\n` +
       `Current date and time: ${new Date().toLocaleString([], { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${tz}).\n` +
-      `Resolve relative dates against that. If a year is missing, use the next occurrence. Weekly timetable classes become ONE event each with a weekly RRULE ` +
-      `(e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20261212T235959Z", set UNTIL only if a term end is visible). Deadlines without a time are all-day events titled "Due: ..." or "Exam: ...". ` +
-      `Never invent events.${$("#hint").value.trim() ? `\nStudent's note: ${$("#hint").value.trim()}` : ""}\n` +
-      `Reply with only JSON: {"events":[{"title":"","start":"YYYY-MM-DDTHH:MM or YYYY-MM-DD if all day","end":"same format","all_day":false,"location":"","recurrence":null,"confidence":"high|medium|low"}],"note":"anything ambiguous, or empty"}`,
+      (terms.length ? `School terms: ${terms.map((t) => `${t.name} ${t.start} to ${t.end}, starting in Week ${t.firstWeek || "A"}`).join("; ")}.\n` : "") +
+      (weekOf(dOf(Date.now())) ? `This week is Week ${weekOf(dOf(Date.now()))}.\n` : "") +
+      `Rules:\n- Resolve relative dates against today. If a year is missing, use the next occurrence. Never invent events.\n` +
+      `- Timetable lessons repeat. A timetable with Week A and Week B (or Week 1 and Week 2, or Day 1 to Day 10) is fortnightly: repeat "fortnightly" with week "A" or "B" ` +
+      `(Week 1 = A, Week 2 = B; Days 1-5 = Week A Monday to Friday, Days 6-10 = Week B Monday to Friday). A single-week timetable is "weekly".\n` +
+      `- One item per lesson. List several days in "days" only when the subject, time and room are identical on those days in the same week.\n` +
+      `- For repeating items, start and end give the lesson times on its next occurrence. Set is_class true for school lessons.\n` +
+      `- Deadlines without a time are all-day items titled "Due: ..." or "Exam: ..." with repeat "none".` +
+      (hint ? `\nStudent's note: ${hint}` : "") +
+      `\nReply with only JSON: {"events":[{"title":"","start":"YYYY-MM-DDTHH:MM or YYYY-MM-DD if all day","end":"same format","all_day":false,"location":"",` +
+      `"repeat":"none|weekly|fortnightly","days":["MO"],"week":"A|B|null","is_class":false,"confidence":"high|medium|low"}],"note":"anything ambiguous, or empty"}`,
       { images: [img], modelTier: "default", cache: false });
-    extracted = Array.isArray(out?.events) ? out.events : [];
-    $("#x-status").textContent = extracted.length ? `Found ${extracted.length}. ${out.note || ""}` : `No events found. ${out?.note || ""}`;
+    const placed = placeInTerms(Array.isArray(out?.events) ? out.events : []);
+    const merged = mergeWithin(placed.list);
+    extracted = merged.list;
+    $("#x-status").innerHTML = `<span class="spin"></span>Checking against your calendar…`;
+    let checked = true;
+    try {
+      const occs = extracted.map(occurrencesOf), pool = await poolFor(occs);
+      extracted.forEach((x, i) => { x.match = classify(x, occs[i], pool); });
+    } catch { checked = false; extracted.forEach((x) => { x.match = { kind: "new" }; }); }
+    const c = { new: 0, dup: 0, update: 0, similar: 0 }; extracted.forEach((x) => { c[x.match.kind]++; });
+    const bits = [c.new && `${c.new} new`, c.update && `${c.update} to update`, c.similar && `${c.similar} to check`, c.dup && `${c.dup} already in your calendar`].filter(Boolean);
+    $("#x-status").textContent = !extracted.length ? `No events found. ${out?.note || ""}` :
+      `${bits.join(" · ")}.` + (merged.removed ? ` Skipped ${merged.removed} listed twice in the screenshot.` : "") +
+      (checked ? "" : " Couldn't check your calendar for duplicates.") +
+      (placed.noTerms ? " Add your term dates in Insights so classes stop at the end of term." : "") + (out?.note ? ` ${out.note}` : "");
     renderExtracted();
   } catch (err) { $("#x-status").textContent = sampleMessage(err); }
 }));
+function repeatText(x) {
+  if (!x.recurrence) return "";
+  const u = (x.recurrence.match(/UNTIL=(\d{4})(\d{2})(\d{2})/) || []).slice(1);
+  return `${x.repeat === "fortnightly" ? `Every second week (Week ${x.week})` : "Every week"} on ${x.days.map((d) => DAY_NAMES[d]).join(", ")}` +
+    (x.term ? ` · ${esc(x.term)}` : "") + (u.length ? ` · until ${esc(fShort(new Date(+u[0], +u[1] - 1, +u[2]).getTime()))}` : " · no end date");
+}
+function xCard(x, i) {
+  const m = x.match || { kind: "new" };
+  return `<div class="card xev ${x.confidence === "low" ? "low" : ""}" data-i="${i}">
+    <input type="checkbox" id="xp-${i}" ${m.kind === "new" || m.kind === "update" ? "checked" : ""} aria-label="Include this event">
+    <div class="fields">
+      ${matchBadge(m)}
+      <input class="input wide" id="xt-${i}" value="${esc(x.title)}" aria-label="Title">
+      <input class="input" id="xs-${i}" value="${esc(x.start)}" aria-label="Start">
+      <input class="input" id="xe-${i}" value="${esc(x.end || x.start)}" aria-label="End">
+      <input class="input wide" id="xl-${i}" value="${esc(x.location || "")}" placeholder="Location" aria-label="Location">
+      ${x.recurrence ? `<div class="wide small muted">${repeatText(x)}</div>` : ""}
+      ${x.confidence && x.confidence !== "high" ? `<div class="wide small muted">${esc(x.confidence)} confidence, so double-check it</div>` : ""}
+    </div></div>`;
+}
 function renderExtracted() {
   if (!extracted.length) { $("#extracted").innerHTML = ""; return; }
-  $("#extracted").innerHTML = extracted.map((x, i) => `<div class="card xev ${x.confidence === "low" ? "low" : ""}" data-i="${i}">
-      <input type="checkbox" id="xp-${i}" checked aria-label="Include this event">
-      <div class="fields">
-        <input class="input wide" id="xt-${i}" value="${esc(x.title)}" aria-label="Title">
-        <input class="input" id="xs-${i}" value="${esc(x.start)}" aria-label="Start">
-        <input class="input" id="xe-${i}" value="${esc(x.end || x.start)}" aria-label="End">
-        <input class="input wide" id="xl-${i}" value="${esc(x.location || "")}" placeholder="Location" aria-label="Location">
-        ${x.recurrence ? `<div class="wide small muted">Repeats: ${esc(String(x.recurrence).replace("RRULE:", ""))}</div>` : ""}
-        ${x.confidence && x.confidence !== "high" ? `<div class="wide small muted">${esc(x.confidence)} confidence, so double-check it</div>` : ""}
-      </div></div>`).join("") +
-    `<div class="row"><label class="small muted" for="x-cal">Add to</label><select class="input" id="x-cal" style="width:auto"></select><button class="btn primary" id="x-add">Add selected</button></div>`;
-  const writable = cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
-  $("#x-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === S.settings.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
+  const idx = extracted.map((_, i) => i), main = idx.filter((i) => extracted[i].match?.kind !== "dup"), dups = idx.filter((i) => extracted[i].match?.kind === "dup");
+  $("#extracted").innerHTML = main.map((i) => xCard(extracted[i], i)).join("") +
+    (dups.length ? `<details class="card"><summary>${dups.length} already in your calendar, skipped</summary><div class="stack" style="margin-top:10px">${dups.map((i) => xCard(extracted[i], i)).join("")}</div></details>` : "") +
+    `<div class="row"><label class="small muted" for="x-cal">Add new events to</label><select class="input" id="x-cal" style="width:auto"></select><button class="btn primary" id="x-add">Add selected</button></div>`;
+  $("#x-cal").innerHTML = writableCals().map((c) => `<option value="${esc(c.id)}" ${c.id === S.settings.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
   $("#x-add").addEventListener("click", (e) => busy(e.currentTarget, "Adding", async () => {
-    const calId = $("#x-cal").value; let ok = 0, fail = 0;
+    const calId = $("#x-cal").value, created = [], updated = [], done = new Set(); let fail = 0;
     for (let i = 0; i < extracted.length; i++) {
       if (!$(`#xp-${i}`).checked) continue;
-      const x = extracted[i], s = $(`#xs-${i}`).value.trim(), en = $(`#xe-${i}`).value.trim() || s;
-      const allDay = !!x.all_day || /^\d{4}-\d{2}-\d{2}$/.test(s);
-      const norm = (v) => (v.length === 16 ? v + ":00" : v.slice(0, 19));
-      let startTime, endTime;
-      if (allDay) { const d0 = s.slice(0, 10); let d1 = en.slice(0, 10); if (d1 <= d0) { const t = new Date(d0 + "T12:00:00"); t.setDate(t.getDate() + 1); d1 = localISO(t.getTime()).slice(0, 10); } startTime = d0 + "T00:00:00"; endTime = d1 + "T00:00:00"; }
-      else { startTime = norm(s); endTime = norm(en); if (endTime <= startTime) endTime = localISO(new Date(startTime).getTime() + HOUR); }
+      const x = extracted[i];
       try {
-        await gcal("create_event", { calendarId: calId || undefined, summary: $(`#xt-${i}`).value.trim() || "Event", startTime, endTime, allDay,
+        if (x.match?.kind === "update") {
+          const ev = x.match.ev, eventId = ev.recurringId || ev.id;
+          await gcal("update_event", { calendarId: ev.calId, eventId, location: $(`#xl-${i}`).value.trim() });
+          updated.push({ calId: ev.calId, eventId, prev: ev.location || "" }); done.add(i); continue;
+        }
+        const s = $(`#xs-${i}`).value.trim(), en = $(`#xe-${i}`).value.trim() || s;
+        const allDay = !!x.all_day || /^\d{4}-\d{2}-\d{2}$/.test(s);
+        const fix = (v) => (v.length === 16 ? v + ":00" : v.slice(0, 19));
+        let startTime, endTime;
+        if (allDay) { const d0 = s.slice(0, 10); let d1 = en.slice(0, 10); if (d1 <= d0) d1 = addDays(d0, 1); startTime = d0 + "T00:00:00"; endTime = d1 + "T00:00:00"; }
+        else { startTime = fix(s); endTime = fix(en); if (endTime <= startTime) endTime = localISO(new Date(startTime).getTime() + HOUR); }
+        const title = $(`#xt-${i}`).value.trim() || "Event";
+        const r = await gcal("create_event", { calendarId: calId, summary: title, startTime, endTime, allDay,
           location: $(`#xl-${i}`).value.trim() || undefined, recurrenceData: x.recurrence ? [String(x.recurrence)] : undefined });
-        ok++; $(`#xp-${i}`).checked = false;
-      } catch (err) { fail++; if (err?.code !== "tool_error") { toast(mcpMessage(err).replace(/<[^>]+>/g, ""), 5000); break; } }
+        created.push({ calId, id: idOf(r), title, startMs: new Date(startTime).getTime() }); done.add(i);
+      } catch (err) { fail++; if (err?.code !== "tool_error") { toast(connectorError(err), 5000); break; } }
     }
-    toast(fail ? `Added ${ok}, ${fail} couldn't be added. Check their times.` : `Added ${ok} event${ok === 1 ? "" : "s"} to Google Calendar`);
-    await mcp.invalidate(GCAL, "list_events").catch(() => {});
-    refresh(true);
+    extracted = extracted.filter((_, i) => !done.has(i)); renderExtracted();
+    if (created.length || updated.length) {
+      pushUndo(`Added ${created.length}${updated.length ? `, updated ${updated.length}` : ""}${fail ? `, ${fail} failed` : ""}`, async () => {
+        for (const u of updated) if (u.prev) await gcal("update_event", { calendarId: u.calId, eventId: u.eventId, location: u.prev });
+        for (const c of created) await deleteCreated(c.calId, c.id, c.title, c.startMs, true);
+        await afterWrite();
+      });
+    } else if (fail) toast(`${fail} couldn't be added. Check their dates and times.`, 5000);
+    await afterWrite();
   }));
 }
 
@@ -1077,9 +1500,10 @@ function renderExtracted() {
     try {
       const snap = await Promise.race([stateRef.get(), new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), 10000))]);
       const d = snap.exists ? snap.data() : null;
-      if (d) { Object.assign(S.settings, d.settings || {}); S.places = d.places || []; S.titleCats = d.titleCats || {}; S.proposals = d.proposals || []; }
+      if (d) { Object.assign(S.settings, d.settings || {}); S.places = d.places || []; S.titleCats = d.titleCats || {}; S.proposals = d.proposals || []; S.travel = d.travel || {}; S.settings.terms = S.settings.terms || []; }
     } catch { /* first visit or slow store: start fresh, saves will catch up */ }
   }
+  termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms();
   if (!mcp) {
     banner("Open Tempo on claude.ai while signed in, and connect <b>Google Calendar</b> under Settings → Connectors.");
     $("#agenda").innerHTML = `<div class="empty">Your calendar will show here once Google Calendar is connected.</div>`;
@@ -1087,6 +1511,10 @@ function renderExtracted() {
   }
   if (!stateRef) toast("Your settings can't be saved in this view.", 5000);
   await refresh(false);
+  const perms = await window.claude.use("permissions").catch(() => null);
+  if (sample && perms && pendingPairs().length && (await perms.state("sample").catch(() => "unavailable")) === "granted") {
+    estimateTravel().then((n) => { if (n) render(); }).catch(() => {});
+  }
 })();
 })();
 </script>
