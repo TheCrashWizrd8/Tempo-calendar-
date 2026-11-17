@@ -473,6 +473,52 @@ async function loadData(refresh = false) {
   loadedAt = Date.now();
 }
 
+
+// ---------------------------------------------------------------- Find My on your Mac
+// The helper on the Mac (mac-helper/) follows the iPhone through Find My and serves the history as the
+// local MCP server "tempo_location". It is only reachable when Tempo is open in the Claude desktop app on
+// that Mac, so new locations are copied into Tempo's own storage (one document per day) for every device.
+const FINDMY = "host:tempo_location";
+let macPings = [], macStatus = null, macReachable = false;
+const dayRef = (day) => db.doc(`data/users/${uid}/tempo`).collection("findmy").doc(day);
+async function loadFindMy() {
+  if (db && uid) {
+    try {
+      const snap = await Promise.race([db.doc(`data/users/${uid}/tempo`).collection("findmy").get(), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 10000))]);
+      const cutoff = Date.now() - 56 * DAY;
+      macPings = snap.docs.flatMap((d) => d.data()?.p || []).filter((x) => x[0] >= cutoff).map(([ts, lat, lng]) => ({ ts, lat, lng })).sort((a, b) => a.ts - b.ts);
+    } catch { /* keep what we have */ }
+  }
+  if (!mcp) return;
+  try {
+    macStatus = (await mcp.callTool(FINDMY, "status", {}, { cache: false })).payload || null;
+    macReachable = true;
+    const since = Math.max(Date.now() - 56 * DAY, macPings.length ? macPings[macPings.length - 1].ts : 0);
+    const fresh = ((await mcp.callTool(FINDMY, "get_pings", { since_ms: since }, { cache: false })).payload?.pings || [])
+      .filter((x) => Number.isFinite(x.lat) && Number.isFinite(x.lng));
+    if (!fresh.length) return;
+    macPings = macPings.concat(fresh.map(({ ts, lat, lng }) => ({ ts, lat, lng }))).sort((a, b) => a.ts - b.ts);
+    if (db && uid) {
+      // rewrite each day that got new locations, with everything known for that day
+      try {
+        for (const k of new Set(fresh.map((x) => dOf(x.ts)))) {
+          await dayRef(k).set({ p: macPings.filter((x) => dOf(x.ts) === k).map((x) => [x.ts, x.lat, x.lng]) });
+        }
+      } catch { /* saving failed: this visit still uses the new locations */ }
+    }
+  } catch (e) {
+    macReachable = false; // not in the Claude desktop app on that Mac, or the helper isn't installed
+  }
+}
+function findMyLine() {
+  const last = macPings.length ? macPings[macPings.length - 1].ts : 0;
+  if (macStatus?.needs_login) return { warn: true, text: "Find My needs you to sign in to Apple again. On your Mac, ask Claude Code to run the Tempo helper's login command." };
+  if (macReachable && macStatus?.last_error && !macStatus?.last_ping) return { warn: true, text: `The Find My helper on your Mac isn't getting locations yet: ${macStatus.last_error}` };
+  if (last) return { text: `Following your iPhone through Find My on your Mac. Last location ${ago(last)}, ${macPings.length} in the last 8 weeks.${macReachable ? "" : " New locations come in when you open Tempo in the Claude app on your Mac."}` };
+  if (macReachable) return { text: "The Find My helper is installed. Waiting for its first location." };
+  return null;
+}
+
 // ---------------------------------------------------------------- location relay -> pings & visits
 const COORD = /(-?\d{1,2}\.\d{3,})\s*[,;\s]\s*(-?\d{1,3}\.\d{3,})/;
 const IFTTT = /\b(entered|exited|arrived(?: at)?|left)\b\s+(.+)$/i;
@@ -485,6 +531,7 @@ function parseRelay() {
     const n = e.title.replace(/^tempo\s*/i, "").match(IFTTT);
     if (n) marks.push({ ts: e.start, enter: /^(entered|arrived)/i.test(n[1]), name: n[2].replace(/\s+at\s+\d.*$/i, "").trim() });
   }
+  for (const p of macPings) pings.push(p);
   return { pings: pings.sort((a, b) => a.ts - b.ts), marks: marks.sort((a, b) => a.ts - b.ts) };
 }
 function dist(a, b) {
@@ -778,8 +825,9 @@ function renderInsights() {
       <div class="row"><button class="btn small" data-pact="save">Save</button><button class="btn small ghost" data-pact="del" aria-label="Forget place">Forget</button></div>
       <div class="muted small" style="grid-column:1/-1">${hours(pl)} h in the last 8 weeks${pl.guessed ? " · named by Claude" : ""}${pl.lat != null ? ` · <a href="https://maps.google.com/?q=${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}" target="_blank" rel="noopener">map</a>` : ""}</div></div>`).join("")
     : `<p class="muted small">No places yet. They appear after you've spent time somewhere on two different days.</p>`;
-  const ls = $("#loc-status");
-  if (!relayCal) { ls.className = "status"; ls.textContent = "Not set up. Start with step 1 of the guide."; }
+  const ls = $("#loc-status"), fm = findMyLine();
+  if (fm) { ls.className = fm.warn ? "status" : "status ok"; ls.textContent = fm.text; $("#open-guide").textContent = "Other ways to share location"; }
+  else if (!relayCal) { ls.className = "status"; ls.textContent = "Not set up. Start with step 1 of the guide."; }
   else if (!model.pings) { ls.className = "status"; ls.textContent = "Found your “Tempo location” calendar. Waiting for your phone's first update."; }
   else { ls.className = "status ok"; ls.textContent = `Location learning is on. Last update ${ago(model.lastPing)}, ${model.pings} in the last 8 weeks.`; }
   const st = S.settings;
@@ -799,7 +847,7 @@ async function busy(btn, label, fn) {
 }
 async function refresh(force) {
   try {
-    await loadCalendars(force); await loadData(force);
+    await loadCalendars(force); await loadData(force); await loadFindMy();
     banner(""); render(); renderMoveCals(); paintCheckins();
     if (S.settings.checkins) syncCheckins();
   } catch (e) {
