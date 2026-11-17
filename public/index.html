@@ -7,10 +7,25 @@
   <meta name="theme-color" content="#4f46e5">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Tempo">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <div id="install-banner" class="banner hidden" role="region" aria-label="Install Tempo">
+    <img src="/icon.svg" alt="" width="36" height="36">
+    <div class="banner-text">
+      <b>Install Tempo on your home screen</b>
+      <span id="install-how">Tap <span class="share-ico" aria-label="Share">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>
+      </span> Share, then <b>Add to Home Screen</b>.</span>
+    </div>
+    <button id="install-btn" class="btn primary small hidden">Install</button>
+    <button id="install-close" class="btn ghost small" aria-label="Dismiss">✕</button>
+  </div>
   <div id="login" class="login hidden">
     <img src="/icon.svg" alt="" width="72" height="72">
     <h1>Tempo</h1>
@@ -82,13 +97,12 @@
         <h3>Location learning</h3>
         <div class="card">
           <label class="switch"><input type="checkbox" id="loc-toggle"> Share location while Tempo is open</label>
-          <p class="muted small">For learning in the background, add a phone automation that sends your location to your private link:</p>
-          <div class="copy-row"><input id="ingest-url" class="input" readonly><button id="copy-ingest" class="btn">Copy</button></div>
+          <p class="muted small" id="bg-status">Background learning: not set up yet.</p>
+          <button id="setup-bg" class="btn primary">Set up background learning</button>
           <details>
-            <summary>How to set it up</summary>
-            <p><b>iPhone (Shortcuts):</b> Automation → “Time of Day” (e.g. every hour, or several times a day) and/or “Arrive/Leave” for places → Run Immediately. Actions: <i>Get Current Location</i> → <i>Get Contents of URL</i> with your link above, Method POST, Request Body JSON with <code>lat</code> = Latitude and <code>lng</code> = Longitude.</p>
-            <p><b>Android (Tasker / Automate):</b> a time or location-change trigger that sends an HTTP POST with JSON <code>{"lat": %LOCN_LAT, "lng": %LOCN_LON}</code> — or <code>{"location": "%LOC"}</code> — to the link.</p>
-            <p>Anyone with this link can add location points to your account, so keep it private. <button id="rotate-ingest" class="link">Make a new link</button></p>
+            <summary>Your private location link</summary>
+            <div class="copy-row"><input id="ingest-url" class="input" readonly><button id="copy-ingest" class="btn">Copy</button></div>
+            <p class="small muted">Anyone with this link can add location points to your account, so keep it private. <button id="rotate-ingest" class="link">Make a new link</button></p>
           </details>
           <button id="forget-loc" class="btn danger small">Delete all location history</button>
         </div>
@@ -114,6 +128,63 @@
       <button data-tab="insights"><span>🧠</span>Insights</button>
     </nav>
   </div>
+  <dialog id="setup-sheet" class="sheet" aria-labelledby="setup-title">
+    <div class="sheet-head">
+      <h2 id="setup-title">Background learning</h2>
+      <button id="setup-close" class="btn ghost small" aria-label="Close">✕</button>
+    </div>
+    <p class="muted small">Your phone sends its location to Tempo a few times a day, even when Tempo is closed. This takes about 3 minutes, once.</p>
+
+    <div id="setup-ios">
+      <ol class="steps">
+        <li>
+          <b>Create the shortcut.</b> Open the <b>Shortcuts</b> app → <b>Shortcuts</b> tab → <b>+</b>. Name it <code>Tempo ping</code>.
+        </li>
+        <li>
+          <b>Add “Get Current Location”.</b> Search for it in the action list and tap it.
+        </li>
+        <li>
+          <b>Add “Get Contents of URL”.</b> Tap the blue <i>URL</i> placeholder and paste your link:
+          <div class="copy-row"><input class="input ingest-url-copy" readonly><button class="btn small" data-copy="url">Copy</button></div>
+          Tap the <b>›</b> arrow to show more options, then set:
+          <ul>
+            <li><b>Method:</b> POST</li>
+            <li><b>Request Body:</b> JSON</li>
+            <li>Tap <b>Add new field → Number</b>. Key <code>lat</code> <button class="btn small" data-copy="lat">Copy</button>. For the value, tap <b>Select Variable</b> → <b>Current Location</b>, then tap that bubble again and choose <b>Latitude</b>.</li>
+            <li>Same again for key <code>lng</code> <button class="btn small" data-copy="lng">Copy</button> → <b>Longitude</b>.</li>
+          </ul>
+        </li>
+        <li>
+          <b>Test it:</b> tap ▶ in the shortcut. If asked, allow location access.
+          <div id="setup-live" class="live waiting">Waiting for your first location…</div>
+        </li>
+        <li>
+          <b>Make it run on its own.</b> Go to the <b>Automation</b> tab → <b>+</b>, and create one or more of these. For each one, choose <b>Run Immediately</b>, then add the action <b>Run Shortcut → Tempo ping</b>.
+          <ul>
+            <li><b>App</b> → “Is Opened” → pick 3–5 apps you use every day (Messages, Instagram…). This gives the most samples, spread naturally through your day.</li>
+            <li><b>Time of Day</b> → e.g. 9 AM, 1 PM, 6 PM, 10 PM (one automation each).</li>
+            <li><b>Wi-Fi</b> → when joining your home or campus network.</li>
+          </ul>
+        </li>
+      </ol>
+      <p class="muted small">Battery use is negligible: Tempo only needs one rough location per run.</p>
+    </div>
+
+    <div id="setup-android" class="hidden">
+      <ol class="steps">
+        <li>Install <b>Tasker</b> or the free <b>Automate</b> app.</li>
+        <li>Create a task that gets your location and sends an <b>HTTP POST</b> to your link with JSON body <code>{"lat": LAT, "lng": LON}</code>:
+          <div class="copy-row"><input class="input ingest-url-copy" readonly><button class="btn small" data-copy="url">Copy</button></div>
+          Tasker shortcut: body <code>{"location": "%LOC"}</code> <button class="btn small" data-copy="tasker">Copy</button>
+        </li>
+        <li>Trigger it every 30–60 minutes, or when you arrive at or leave places.</li>
+        <li>Run it once to test:
+          <div class="live waiting" id="setup-live-android">Waiting for your first location…</div>
+        </li>
+      </ol>
+    </div>
+    <p class="small"><button id="setup-other" class="link">Show steps for the other phone type</button></p>
+  </dialog>
   <div id="toast" class="toast hidden"></div>
   <script src="/app.js" type="module"></script>
 </body>

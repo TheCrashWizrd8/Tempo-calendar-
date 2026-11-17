@@ -237,6 +237,12 @@ app.post("/api/ingest/:token", (req, res) => {
   res.json({ stored: addPings(user.id, Array.isArray(body.points) ? body.points : [body], "automation") });
 });
 
+app.get("/api/location/status", auth, (req, res) => {
+  const last = (source) => db.prepare("SELECT MAX(ts) t FROM pings WHERE user_id = ? AND source = ?").get(req.user.id, source).t;
+  const today = db.prepare("SELECT COUNT(*) n FROM pings WHERE user_id = ? AND source = 'automation' AND ts > ?").get(req.user.id, Date.now() - 86400000).n;
+  res.json({ lastAutomation: last("automation"), lastApp: last("app"), automationToday: today });
+});
+
 app.post("/api/ingest-token/rotate", auth, (req, res) => {
   db.prepare("UPDATE users SET ingest_token = ? WHERE id = ?").run(crypto.randomBytes(18).toString("base64url"), req.user.id);
   res.json({ ok: true });

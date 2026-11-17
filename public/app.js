@@ -179,6 +179,7 @@ async function loadInsights() {
       <div class="muted small" style="flex-basis:100%">${p.hours} h over ${p.visits} visits (8 wks)${p.guessed ? " · name guessed by AI" : ""} · <a href="https://maps.google.com/?q=${p.lat},${p.lng}" target="_blank" rel="noopener">map</a></div>
     </div>`).join("") : `<p class="muted">No places yet. Turn on location learning below — places appear after you've spent time somewhere on 2+ days.</p>`;
   $("#ingest-url").value = me.ingestUrl;
+  refreshBgStatus();
   const f = $("#settings");
   for (const [k, v] of Object.entries(me.settings)) if (f.elements[k]) f.elements[k].value = Array.isArray(v) ? v.join(", ") : v;
   $("#who").textContent = `${me.name || ""} (${me.email}) · ${me.timezone}`;
@@ -217,6 +218,7 @@ $("#copy-ingest").addEventListener("click", async () => { await navigator.clipbo
 $("#rotate-ingest").addEventListener("click", async () => {
   if (!confirm("Old link will stop working. Continue?")) return;
   await api("/api/ingest-token/rotate", { method: "POST" }); me = await api("/api/me"); $("#ingest-url").value = me.ingestUrl;
+  toast("New link made — update the URL in your Shortcut");
   if (inNativeApp) window.ReactNativeWebView.postMessage(JSON.stringify({ type: "ingest-url", url: me.ingestUrl }));
 });
 $("#forget-loc").addEventListener("click", async () => {
@@ -224,6 +226,83 @@ $("#forget-loc").addEventListener("click", async () => {
   await api("/api/location-history", { method: "DELETE" }); toast("Location history deleted"); loadInsights();
 });
 $("#logout").addEventListener("click", async () => { await api("/auth/logout", { method: "POST" }); showLogin(); });
+
+// ---------------- background learning setup ----------------
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isAndroid = /Android/.test(navigator.userAgent);
+const ago = (ms) => {
+  const m = Math.round((Date.now() - ms) / 60000);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+};
+async function refreshBgStatus() {
+  const s = await api("/api/location/status");
+  const el = $("#bg-status");
+  if (s.lastAutomation) {
+    el.innerHTML = `✅ Background learning is on. Last update ${ago(s.lastAutomation)} · ${s.automationToday} today.`;
+    $("#setup-bg").textContent = "Setup guide";
+    $("#setup-bg").classList.remove("primary");
+  } else {
+    el.textContent = "Background learning: not set up yet.";
+  }
+  return s;
+}
+let setupPoll = null, setupStartedAt = 0;
+function openSetup() {
+  setupStartedAt = Date.now();
+  showSetupFor(isAndroid ? "android" : "ios");
+  document.querySelectorAll(".ingest-url-copy").forEach((i) => { i.value = me.ingestUrl; });
+  $("#setup-sheet").showModal();
+  clearInterval(setupPoll);
+  setupPoll = setInterval(async () => {
+    const s = await refreshBgStatus().catch(() => null);
+    if (s?.lastAutomation && s.lastAutomation >= setupStartedAt - 5 * 60000) {
+      document.querySelectorAll(".live").forEach((el) => {
+        el.className = "live ok";
+        el.textContent = `✅ Received at ${fmtTime(s.lastAutomation)}. Your shortcut works! Now add the automations below.`;
+      });
+    }
+  }, 3000);
+}
+function showSetupFor(kind) {
+  $("#setup-ios").classList.toggle("hidden", kind !== "ios");
+  $("#setup-android").classList.toggle("hidden", kind !== "android");
+  $("#setup-other").textContent = kind === "ios" ? "Using Android? Show those steps" : "Using an iPhone? Show those steps";
+  $("#setup-other").dataset.kind = kind;
+}
+$("#setup-bg").addEventListener("click", openSetup);
+$("#setup-other").addEventListener("click", (e) => showSetupFor(e.target.dataset.kind === "ios" ? "android" : "ios"));
+$("#setup-close").addEventListener("click", () => $("#setup-sheet").close());
+$("#setup-sheet").addEventListener("close", () => clearInterval(setupPoll));
+$("#setup-sheet").addEventListener("click", async (e) => {
+  const what = e.target.dataset.copy;
+  if (!what) return;
+  const text = { url: me.ingestUrl, lat: "lat", lng: "lng", tasker: '{"location": "%LOC"}' }[what];
+  try { await navigator.clipboard.writeText(text); toast(`Copied “${text.length > 40 ? "your link" : text}”`); }
+  catch { toast("Long-press the text to copy it"); }
+});
+
+// ---------------- install banner ----------------
+(() => {
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  let dismissed = false;
+  try { dismissed = localStorage.getItem("installDismissed") === "1"; } catch {}
+  if (inNativeApp || standalone || dismissed) return;
+  const banner = $("#install-banner");
+  $("#install-close").addEventListener("click", () => {
+    banner.classList.add("hidden");
+    try { localStorage.setItem("installDismissed", "1"); } catch {}
+  });
+  if (isIOS) { banner.classList.remove("hidden"); return; }
+  // Android / desktop Chrome & Edge offer a real install prompt
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    $("#install-how").textContent = "Get it as an app: full screen, with its own icon.";
+    const btn = $("#install-btn");
+    btn.classList.remove("hidden");
+    banner.classList.remove("hidden");
+    btn.onclick = async () => { e.prompt(); await e.userChoice; banner.classList.add("hidden"); };
+  });
+})();
 
 // ---------------- location while open ----------------
 let watchId = null;
