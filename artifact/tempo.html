@@ -600,6 +600,41 @@ function learnPlaces(pings, marks) {
   return visits.map((v) => ({ ...v, end: Math.max(v.end, v.start + 20 * MIN) }));
 }
 
+// ---------------------------------------------------------------- what each place is (learned)
+const alsoWork = (pl) => pl.kind !== "work" && (pl.workSet ?? pl.autoWork ?? false);
+/** Hours at a place split by what your calendar says was happening, plus when you're there with nothing on. */
+function placeStats(pl, visits, past) {
+  const st = { hours: 0, work: 0, class: 0, free: 0, freeSlots: {}, freeDays: new Set(), titles: new Set() };
+  for (const v of visits) {
+    if (v.place.id !== pl.id) continue;
+    for (let t = v.start; t < v.end; t += 15 * MIN) {
+      st.hours += 0.25;
+      const e = past.find((x) => x.start <= t && x.end > t && !isTempoStudy(x)), c = e && catOf(e);
+      if (e) st.titles.add(e.title);
+      if (c === "work") st.work += 0.25; else if (c === "class") st.class += 0.25;
+      else if (!e) { st.free += 0.25; const p = lp(t), k = `${DAYS[p.dow]} ${p.hour}:00`; st.freeSlots[k] = (st.freeSlots[k] || 0) + 0.25; st.freeDays.add(p.key); }
+    }
+  }
+  return st;
+}
+/** Learn from your calendar: shifts while you're somewhere mean you work there; classes there mean it's your school. */
+function inferPlaceRoles(visits, past) {
+  let changed = false;
+  for (const pl of S.places) {
+    const st = placeStats(pl, visits, past);
+    pl.stats = { hours: +st.hours.toFixed(1), work: st.work, class: st.class, free: st.free, freeDays: st.freeDays.size,
+      freeSlots: Object.entries(st.freeSlots).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k]) => k), titles: [...st.titles].slice(0, 12) };
+    if (!pl.kindSet && pl.kind === "unknown" && st.class >= 2) { pl.kind = "school"; changed = true; }
+    const workDays = new Set();
+    for (const v of visits) if (v.place.id === pl.id && past.some((e) => catOf(e) === "work" && e.start < v.end && e.end > v.start)) workDays.add(lp(v.start).key);
+    if (workDays.size >= 2) {
+      if (!pl.kindSet && (pl.kind === "unknown" || pl.kind === "other") && st.class < 2) { pl.kind = "work"; changed = true; }
+      else if (pl.kind !== "work" && !pl.autoWork) { pl.autoWork = true; pl.workWhy = "shifts on your calendar"; changed = true; }
+    }
+  }
+  if (changed) save();
+}
+
 // ---------------------------------------------------------------- categories
 function heuristic(e) {
   const t = e.title.toLowerCase();
@@ -622,6 +657,7 @@ function buildModel() {
   const now = Date.now(), from = now - 56 * DAY;
   const { pings, marks } = parseRelay();
   const visits = learnPlaces(pings, marks);
+  inferPlaceRoles(visits, events.filter((e) => !e.allDay && e.start >= from && e.end <= now));
   verifySessions(pings, visits);
   const study = grid(), busy = grid(), pref = grid();
   const why = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({})));
@@ -632,10 +668,20 @@ function buildModel() {
     if (c === "study") eachQuarter(e.start, e.end, (d, h, w) => { study[d][h] += w; });
     else if (BUSY_CATS.has(c)) eachQuarter(e.start, e.end, (d, h, w) => { busy[d][h] += w; why[d][h][c] = (why[d][h][c] || 0) + w; });
   }
+  // What were you doing at a place? Your calendar decides first: a shift is work and a class is class (both
+  // already counted above). Time at a place you also work at that isn't on the calendar counts as busy, never study.
+  const timed = past.filter((e) => !isTempoStudy(e));
   for (const v of visits) {
-    const k = v.place.kind, label = v.place.name || k;
-    if (STUDY_KINDS.has(k)) eachQuarter(v.start, v.end, (d, h, w) => { study[d][h] += 0.5 * w; });
-    else if (AWAY_KINDS.has(k)) eachQuarter(v.start, v.end, (d, h, w) => { busy[d][h] += w; why[d][h][`at ${label}`] = (why[d][h][`at ${label}`] || 0) + w; });
+    const pl = v.place, k = pl.kind, label = pl.name || k, works = alsoWork(pl) || AWAY_KINDS.has(k);
+    if (!works && !STUDY_KINDS.has(k)) continue;
+    for (let t = v.start; t < v.end; t += 15 * MIN) {
+      const c = timed.find((e) => e.start <= t && e.end > t);
+      const cat = c && catOf(c);
+      if (cat === "work" || cat === "class" || (c && BUSY_CATS.has(cat))) continue;
+      const { dow: d, hour: h } = lp(t);
+      if (works) { const tag = alsoWork(pl) ? `at ${label}, work or class` : `at ${label}`; busy[d][h] += 0.25; why[d][h][tag] = (why[d][h][tag] || 0) + 0.25; }
+      else if (cat === "study" || !c) study[d][h] += 0.5 * 0.25;
+    }
   }
   const weight = { completed: 1.5, accepted: 0.4, rejected: -1, skipped: -1.5 };
   for (const p of S.proposals) if (weight[p.status]) eachQuarter(p.start, p.end, (d, h, w) => { pref[d][h] += weight[p.status] * w; });
@@ -692,7 +738,7 @@ function describe() {
   if (bz.length) L.push(`You're usually busy: ${bz.map(({ d, h }) => { const w = topWhy(d, h); return `${DAYS[d]} ${h}:00${w ? ` (${w.replace(/_/g, " ")})` : ""}`; }).join(", ")}.`);
   const o = model.outcomes;
   L.push(`Past suggestions: ${o.completed || 0} done, ${o.skipped || 0} skipped, ${o.rejected || 0} declined.`);
-  const named = S.places.filter((p) => p.name); if (named.length) L.push(`Places: ${named.map((p) => `${p.name} (${p.kind})`).join(", ")}.`);
+  const named = S.places.filter((p) => p.name); if (named.length) L.push(`Places: ${named.map((p) => `${p.name} (${p.kind}${alsoWork(p) ? ", also works here" : ""})`).join(", ")}.`);
   return L;
 }
 
@@ -703,9 +749,10 @@ function verifySessions(pings, visits) {
     if (s.status !== "accepted" || s.end > Date.now()) continue;
     let good = 0, bad = 0;
     for (const p of pings) if (p.ts >= s.start && p.ts <= s.end) {
-      const k = nearestPlace(p)?.kind; if (STUDY_KINDS.has(k) || k === "home") good++; else bad++;
+      const pl = nearestPlace(p); if ((pl && alsoWork(pl))) continue; // could be a shift: ask instead
+      const k = pl?.kind; if (STUDY_KINDS.has(k) || k === "home") good++; else bad++;
     }
-    for (const v of visits) if (v.start < s.end && v.end > s.start) { if (STUDY_KINDS.has(v.place.kind) || v.place.kind === "home") good++; else if (AWAY_KINDS.has(v.place.kind)) bad++; }
+    for (const v of visits) if (v.start < s.end && v.end > s.start && !alsoWork(v.place)) { if (STUDY_KINDS.has(v.place.kind) || v.place.kind === "home") good++; else if (AWAY_KINDS.has(v.place.kind)) bad++; }
     if (good > bad) { s.status = "completed"; changed = true; } else if (bad > good) { s.status = "skipped"; changed = true; }
   }
   if (changed) save();
@@ -737,23 +784,30 @@ async function categorise() {
   for (const [k, v] of Object.entries(out || {})) if (titles.includes(k) && CATS.includes(v)) { S.titleCats[k] = v; n++; }
   save(); return n;
 }
+/** Claude names new places and decides, from your routine, whether you probably work somewhere (e.g. at your own school). */
 async function namePlaces() {
-  const todo = S.places.filter((p) => !p.name && p.lat != null).slice(0, 4);
-  for (const pl of todo) {
-    const vs = model.visits.filter((v) => v.place.id === pl.id);
-    if (vs.length < 2) continue;
-    const titles = new Set(), hours = {};
-    for (const v of vs) {
-      for (const e of events) if (!e.allDay && e.start < v.end && e.end > v.start) titles.add(e.title + (e.location ? ` @ ${e.location}` : ""));
-      const p = lp(v.start); const k = `${DAYS[p.dow]} ${p.hour}:00`; hours[k] = (hours[k] || 0) + 1;
-    }
-    const g = await sample.json(
-      `Guess what place a student regularly visits. Calendar events during visits: ${[...titles].slice(0, 15).join(" | ") || "(none)"}. ` +
-      `Usual times there: ${Object.entries(hours).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k]) => k).join(", ")}. ` +
-      `Reply with only JSON {"name": short name, "kind": one of ${KINDS.slice(1).join("|")}}.`, { modelTier: "quick" });
-    if (g?.name) { pl.name = String(g.name).slice(0, 40); pl.kind = KINDS.includes(g.kind) ? g.kind : "other"; pl.guessed = true; }
+  const todo = S.places.filter((p) => p.stats && p.stats.hours >= 2 && (!p.name || (!p.kindSet && p.workSet == null && !p.autoWork && p.kind !== "work" && p.stats.free >= 4 && p.stats.freeDays >= 2))).slice(0, 5);
+  S.settings.placesCheckedAt = Date.now();
+  if (!todo.length) { save(); return 0; }
+  const g = await sample.json(
+    `A student's phone location history shows these regular places. For each, decide what it is and whether the student probably works there ` +
+    `(they have jobs at more than one place, and one job is at their own school). Classes and shifts on their calendar are already counted; "unexplained" time is ` +
+    `when they were there with nothing on their calendar. Long, regular unexplained blocks at a school outside class hours (evenings, weekends, holidays) suggest work; ` +
+    `short ones around class times suggest study, sport or waiting.\n` +
+    todo.map((p, i) => `${i + 1}. name: ${p.name || "(unnamed)"}; type so far: ${p.kind}; hours there in 8 weeks: ${p.stats.hours}; during classes: ${p.stats.class}; ` +
+      `during work shifts: ${p.stats.work}; unexplained: ${p.stats.free} h on ${p.stats.freeDays} days, mostly ${p.stats.freeSlots.join(", ") || "n/a"}; ` +
+      `calendar events while there: ${p.stats.titles.join(" | ") || "none"}`).join("\n") +
+    `\nReply with only JSON: {"places":[{"n":1,"name":"short name","kind":"one of ${KINDS.slice(1).join("|")}","works_here":true,"reason":"a few words"}]}`,
+    { modelTier: "default" });
+  let n = 0;
+  for (const r of g?.places || []) {
+    const pl = todo[(r?.n | 0) - 1]; if (!pl) continue;
+    if (!pl.name && r.name) { pl.name = String(r.name).slice(0, 40); pl.guessed = true; }
+    if (!pl.kindSet && KINDS.includes(r.kind) && (pl.kind === "unknown" || pl.guessed)) pl.kind = r.kind;
+    if (pl.workSet == null && pl.kind !== "work" && typeof r.works_here === "boolean") { pl.autoWork = r.works_here; if (r.works_here) pl.workWhy = String(r.reason || "your routine there").slice(0, 60); }
+    n++;
   }
-  save();
+  save(); return n;
 }
 
 /** Event start + 10 min, grouped into weekly times you can turn into Shortcuts automations. */
@@ -836,6 +890,7 @@ function renderInsights() {
       <input class="input" id="pn-${pl.id}" value="${esc(pl.name)}" placeholder="Name this place" aria-label="Place name">
       <select class="input" id="pk-${pl.id}" aria-label="Place type">${KINDS.map((k) => `<option ${k === pl.kind ? "selected" : ""}>${k}</option>`).join("")}</select>
       <div class="row"><button class="btn small" data-pact="save">Save</button><button class="btn small ghost" data-pact="del" aria-label="Forget place">Forget</button></div>
+      <label class="row small" style="grid-column:1/-1;gap:6px"><input type="checkbox" id="pw-${pl.id}" ${alsoWork(pl) || pl.kind === "work" ? "checked" : ""} ${pl.kind === "work" ? "disabled" : ""}> I work here${pl.kind === "work" ? "" : " too"}${pl.workSet == null && pl.autoWork ? ` <span class="muted">(learned from ${esc(pl.workWhy || "your routine")})</span>` : ""}</label>
       <div class="muted small" style="grid-column:1/-1">${hours(pl)} h in the last 8 weeks${pl.guessed ? " · named by Claude" : ""}${pl.lat != null ? ` · <a href="https://maps.google.com/?q=${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}" target="_blank" rel="noopener">map</a>` : ""}</div></div>`).join("")
     : `<p class="muted small">No places yet. They appear after you've spent time somewhere on two different days.</p>`;
   const ls = $("#loc-status"), fm = findMyLine();
@@ -950,7 +1005,10 @@ $("#places").addEventListener("click", (e) => {
   const id = b.closest("[data-place]").dataset.place, pl = S.places.find((x) => x.id === id); if (!pl) return;
   if (b.dataset.pact === "del" && b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to forget"; return; }
   const before = snapshotS();
-  if (b.dataset.pact === "save") { pl.name = $(`#pn-${id}`).value.trim(); pl.kind = $(`#pk-${id}`).value; pl.guessed = false; }
+  if (b.dataset.pact === "save") { pl.name = $(`#pn-${id}`).value.trim(); const k = $(`#pk-${id}`).value, w = $(`#pw-${id}`).checked;
+    if (k !== pl.kind) pl.kindSet = true; pl.kind = k;
+    if (k !== "work" && w !== alsoWork(pl)) pl.workSet = w;
+    pl.guessed = false; }
   else S.places = S.places.filter((x) => x.id !== id);
   save(); render();
   pushUndo(b.dataset.pact === "save" ? "Place saved" : "Place forgotten", async () => restoreS(before));
@@ -1777,6 +1835,9 @@ function renderExtracted() {
   const perms = await window.claude.use("permissions").catch(() => null);
   if (sample && perms && pendingPairs().length && (await perms.state("sample").catch(() => "unavailable")) === "granted") {
     estimateTravel().then((n) => { if (n) render(); }).catch(() => {});
+  }
+  if (sample && perms && Date.now() - (S.settings.placesCheckedAt || 0) > 20 * HOUR && (await perms.state("sample").catch(() => "unavailable")) === "granted") {
+    namePlaces().then((n) => { if (n) render(); }).catch(() => {});
   }
 })();
 })();
