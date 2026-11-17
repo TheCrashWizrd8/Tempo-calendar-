@@ -27,8 +27,11 @@ cat > "$PLIST" <<PL
   <key>StandardErrorPath</key><string>$APP/poll.log</string>
 </dict></plist>
 PL
+# reinstall: stop the old job and wait until macOS has really unloaded it (bootout returns early)
 launchctl bootout "gui/$(id -u)/com.tempo.findmy" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+for _ in $(seq 1 20); do launchctl print "gui/$(id -u)/com.tempo.findmy" >/dev/null 2>&1 || break; sleep 0.5; done
+launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+launchctl kickstart -k "gui/$(id -u)/com.tempo.findmy" || { echo "Couldn't start the background collector (com.tempo.findmy)."; exit 1; }
 
 # register the local MCP server with the Claude desktop app (keeps any existing servers)
 CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
