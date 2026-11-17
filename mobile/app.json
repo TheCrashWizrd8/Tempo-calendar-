@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Tempo",
+    "slug": "tempo-calendar",
+    "scheme": "tempo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": { "image": "./assets/splash-icon.png", "resizeMode": "contain", "backgroundColor": "#4f46e5" },
+    "ios": {
+      "bundleIdentifier": "com.CHANGEME.tempo",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "Choose screenshots of schedules, syllabi or messages to turn into calendar events.",
+        "NSCameraUsageDescription": "Take a photo of a schedule or flyer to turn it into calendar events."
+      }
+    },
+    "android": {
+      "package": "com.CHANGEME.tempo",
+      "adaptiveIcon": {
+        "backgroundColor": "#4f46e5",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "plugins": [
+      "expo-web-browser",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Tempo uses your location to learn where you study, work out and spend time, so it can suggest study sessions that fit your real routine.",
+          "locationAlwaysAndWhenInUsePermission": "Allow \"Always\" so Tempo can learn your routine in the background (e.g. library on Tuesday afternoons, gym on Monday evenings). Location is only sent to your own Tempo server.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
+    ]
+  }
+}

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Tempo</title>
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <img src="/icon.svg" alt="" width="72" height="72">
+    <h1>Tempo</h1>
+    <p>Your Google Calendar, with an AI that imports screenshots, plans study time, and learns your routine.</p>
+    <a class="btn primary big" href="/auth/google">Sign in with Google</a>
+  </div>
+
+  <div id="app" class="hidden">
+    <header>
+      <div class="brand"><img src="/icon.svg" alt="" width="28" height="28"> Tempo</div>
+      <div class="hdr-right">
+        <span id="loc-dot" class="dot" title="Location learning"></span>
+        <button id="sync-btn" class="btn ghost" title="Sync with Google Calendar">↻ Sync</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- AGENDA -->
+      <section id="tab-agenda" class="tab">
+        <div id="checkins"></div>
+        <div id="agenda"></div>
+      </section>
+
+      <!-- IMPORT -->
+      <section id="tab-import" class="tab hidden">
+        <h2>Import from a screenshot</h2>
+        <p class="muted">Class schedule, syllabus, email, flyer, group chat — drop it in and review before anything is added.</p>
+        <label id="drop" class="drop">
+          <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+          <span id="drop-text">Tap to choose an image, or paste / drop it here</span>
+          <img id="preview" class="hidden" alt="Screenshot preview">
+        </label>
+        <input id="hint" class="input" placeholder="Optional note, e.g. “this is my spring timetable, term ends May 9”">
+        <button id="extract-btn" class="btn primary" disabled>Read events</button>
+        <div id="import-status" class="muted"></div>
+        <div id="extracted"></div>
+      </section>
+
+      <!-- STUDY -->
+      <section id="tab-study" class="tab hidden">
+        <h2>Plan study time</h2>
+        <textarea id="goals" class="input" rows="3" placeholder="What's coming up? e.g. “Bio midterm Friday, 2 problem sets due Thursday, want 1h of Spanish daily”"></textarea>
+        <div class="row">
+          <label class="muted">Plan the next
+            <select id="plan-days" class="input inline"><option>3</option><option selected>7</option><option>14</option></select> days
+          </label>
+          <button id="propose-btn" class="btn primary">Suggest sessions</button>
+        </div>
+        <div id="plan-summary" class="card hidden"></div>
+        <div id="proposals"></div>
+        <h3>Booked sessions</h3>
+        <div id="booked" class="muted">None yet.</div>
+      </section>
+
+      <!-- INSIGHTS -->
+      <section id="tab-insights" class="tab hidden">
+        <h2>What Tempo has learned</h2>
+        <pre id="summary" class="card summary"></pre>
+
+        <h3>When you study</h3>
+        <div id="heat-study" class="heat"></div>
+        <h3>When you're usually busy</h3>
+        <p class="muted small">Includes routines that aren't on your calendar, learned from where you are.</p>
+        <div id="heat-busy" class="heat"></div>
+
+        <h3>Places</h3>
+        <div id="places"></div>
+
+        <h3>Location learning</h3>
+        <div class="card">
+          <label class="switch"><input type="checkbox" id="loc-toggle"> Share location while Tempo is open</label>
+          <p class="muted small">For learning in the background, add a phone automation that sends your location to your private link:</p>
+          <div class="copy-row"><input id="ingest-url" class="input" readonly><button id="copy-ingest" class="btn">Copy</button></div>
+          <details>
+            <summary>How to set it up</summary>
+            <p><b>iPhone (Shortcuts):</b> Automation → “Time of Day” (e.g. every hour, or several times a day) and/or “Arrive/Leave” for places → Run Immediately. Actions: <i>Get Current Location</i> → <i>Get Contents of URL</i> with your link above, Method POST, Request Body JSON with <code>lat</code> = Latitude and <code>lng</code> = Longitude.</p>
+            <p><b>Android (Tasker / Automate):</b> a time or location-change trigger that sends an HTTP POST with JSON <code>{"lat": %LOCN_LAT, "lng": %LOCN_LON}</code> — or <code>{"location": "%LOC"}</code> — to the link.</p>
+            <p>Anyone with this link can add location points to your account, so keep it private. <button id="rotate-ingest" class="link">Make a new link</button></p>
+          </details>
+          <button id="forget-loc" class="btn danger small">Delete all location history</button>
+        </div>
+
+        <h3>Preferences</h3>
+        <form id="settings" class="card grid2">
+          <label>Session length (min)<input class="input" name="sessionMinutes" type="number" min="15" step="15"></label>
+          <label>Max sessions / day<input class="input" name="maxSessionsPerDay" type="number" min="1" max="6"></label>
+          <label>Earliest hour<input class="input" name="earliestHour" type="number" min="0" max="23"></label>
+          <label>Latest hour<input class="input" name="latestHour" type="number" min="1" max="24"></label>
+          <label>Buffer around events (min)<input class="input" name="bufferMinutes" type="number" min="0" step="5"></label>
+          <label class="span2">Subjects (comma separated)<input class="input" name="subjects"></label>
+          <button class="btn primary span2">Save</button>
+        </form>
+        <p class="muted small"><span id="who"></span> · <button id="logout" class="link">Sign out</button></p>
+      </section>
+    </main>
+
+    <nav class="tabs">
+      <button data-tab="agenda" class="active"><span>📅</span>Agenda</button>
+      <button data-tab="import"><span>📸</span>Import</button>
+      <button data-tab="study"><span>📚</span>Study</button>
+      <button data-tab="insights"><span>🧠</span>Insights</button>
+    </nav>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

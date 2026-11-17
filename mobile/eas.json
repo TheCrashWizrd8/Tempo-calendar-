@@ -1,0 +1,17 @@
+{
+  "cli": { "version": ">= 16.0.0", "appVersionSource": "remote" },
+  "build": {
+    "development": {
+      "developmentClient": false,
+      "distribution": "internal",
+      "env": { "EXPO_PUBLIC_SERVER_URL": "https://CHANGEME.example.com" }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": { "EXPO_PUBLIC_SERVER_URL": "https://CHANGEME.example.com" }
+    }
+  },
+  "submit": {
+    "production": { "ios": {} }
+  }
+}
