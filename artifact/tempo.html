@@ -491,10 +491,11 @@ async function loadFindMy() {
   }
   if (!mcp) return;
   try {
-    macStatus = (await mcp.callTool(FINDMY, "status", {}, { cache: false })).payload || null;
+    const unwrap = (p) => (p && typeof p === "object" && "result" in p && Object.keys(p).length === 1 ? p.result : p); // some MCP versions wrap tool results
+    macStatus = unwrap((await mcp.callTool(FINDMY, "status", {}, { cache: false })).payload) || null;
     macReachable = true;
     const since = Math.max(Date.now() - 56 * DAY, macPings.length ? macPings[macPings.length - 1].ts : 0);
-    const fresh = ((await mcp.callTool(FINDMY, "get_pings", { since_ms: since }, { cache: false })).payload?.pings || [])
+    const fresh = (unwrap((await mcp.callTool(FINDMY, "get_pings", { since_ms: since }, { cache: false })).payload)?.pings || [])
       .filter((x) => Number.isFinite(x.lat) && Number.isFinite(x.lng));
     if (!fresh.length) return;
     macPings = macPings.concat(fresh.map(({ ts, lat, lng }) => ({ ts, lat, lng }))).sort((a, b) => a.ts - b.ts);
