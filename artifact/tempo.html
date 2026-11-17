@@ -110,6 +110,12 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
 .ed-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
 .btn.danger { color: var(--bad); }
 .err { color: var(--bad); font-size: 13px; }
+.plan .prow { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
+.plan .prow .ic { font-weight: 700; color: var(--accent); text-align: center; }
+.plan .prow.warn .ic, .plan .prow.warn { color: rgb(var(--busy)); }
+.plan .times { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.plan .times .input { width: auto; padding: 5px 8px; font-size: 14px; }
+.plan s { color: var(--muted); }
 .toast { display: flex; gap: 14px; align-items: center; }
 .toast-undo { background: none; border: 0; padding: 0; color: inherit; font: 600 14px var(--body); text-decoration: underline; cursor: pointer; }
 .drive { font-size: 12px; color: var(--muted); margin: -2px 0 6px 86px; }
@@ -137,13 +143,14 @@ details.card summary { cursor: pointer; font-weight: 500; }
   <!-- AGENDA -->
   <section id="v-agenda">
     <form id="qa" class="row" style="margin-top:12px">
-      <input class="input grow" id="qa-text" placeholder="Quick add, e.g. “Tutoring Thu 4–5pm at library”" aria-label="Quick add an event" autocomplete="off">
-      <button class="btn primary" id="qa-btn">Add</button>
+      <input class="input grow" id="qa-text" placeholder="Ask Tempo: “Dinner at Jill's Thursday”, “find 2h for my essay before Friday”" aria-label="Ask Tempo to add, find time or move things" autocomplete="off">
+      <button class="btn primary" id="qa-btn">Ask</button>
     </form>
     <div class="row" style="margin-top:10px">
       <span class="small muted">This week is</span>
       <div class="seg" role="group" aria-label="Current fortnight week"><button type="button" data-wk="A" aria-pressed="false">Week A</button><button type="button" data-wk="B" aria-pressed="false">Week B</button></div>
     </div>
+    <div id="ask-plan" class="stack" style="margin-top:10px"></div>
     <div id="checkins" class="stack" style="margin-top:12px"></div>
     <div id="agenda"><div class="empty"><span class="spin"></span>Loading your calendars…</div></div>
   </section>
@@ -322,7 +329,8 @@ details.card summary { cursor: pointer; font-weight: 500; }
         <button type="button" id="ed-scope-one" aria-pressed="true">This event</button><button type="button" id="ed-scope-all" aria-pressed="false">All events</button>
       </div>
     </div>
-    <label class="row small" style="gap:6px"><input type="checkbox" id="ed-allday"> All day</label>
+    <div class="row small" style="gap:16px"><label class="row" style="gap:6px"><input type="checkbox" id="ed-allday"> All day</label>
+      <label class="row" style="gap:6px"><input type="checkbox" id="ed-flex"> Tempo can move this</label></div>
     <div class="ed-grid">
       <label class="date">Date<input class="input" type="date" id="ed-date"></label>
       <label id="ed-start-l">Start<input class="input" type="time" id="ed-start"></label>
@@ -653,6 +661,10 @@ function heuristic(e) {
   return null;
 }
 const catOf = (e) => S.titleCats[e.title] || heuristic(e);
+// Things Tempo may shuffle: its own study and focus blocks, and anything you mark "Tempo can move this".
+const FLEX = "[Tempo can move this]";
+const isMovable = (e) => isTempoStudy(e) || /^🧱 /.test(e.title) || (e.desc || "").includes(FLEX);
+const withFlex = (notes, on) => { const t = String(notes || "").replace(FLEX, "").trim(); return on ? (t ? `${t}\n${FLEX}` : FLEX) : t; };
 const isTempoStudy = (e) => /^📚 Study:/.test(e.title);
 
 // ---------------------------------------------------------------- habit model
@@ -839,9 +851,9 @@ function render() {
   renderAgenda(); renderStudy(); renderInsights(); paintWeek(); renderCheckinTimes();
 }
 function evCard(e) {
-  const c = catOf(e);
+  const c = catOf(e), flex = isMovable(e);
   return `<div class="ev ${c === "study" ? "study" : ""}" data-key="${esc(e.key)}" role="button" tabindex="0" aria-label="Edit ${esc(e.title)}"><div class="t">${e.allDay ? "All day" : `${fTime(e.start)}<br>${fTime(e.end)}`}</div>
-    <div class="b"><div class="title">${COLORS[e.color] ? `<span class="cdot" style="background:${COLORS[e.color]}"></span>` : ""}${esc(e.title)}${c ? `<span class="chip">${esc(c.replace(/_/g, " "))}</span>` : ""}</div>
+    <div class="b"><div class="title">${COLORS[e.color] ? `<span class="cdot" style="background:${COLORS[e.color]}"></span>` : ""}${esc(e.title)}${c ? `<span class="chip">${esc(c.replace(/_/g, " "))}</span>` : ""}${flex ? `<span class="chip cal">movable</span>` : ""}</div>
     <div class="meta">${e.location ? `${esc(e.location)} · ` : ""}${esc(e.cal)}</div></div></div>`;
 }
 function suggestCard(p, withDate) {
@@ -1291,7 +1303,8 @@ function openEditor(ev, preset = {}) {
   $("#ed-end").value = preset.end ?? tOf(base.end);
   $("#ed-enddate").value = preset.endDate ?? (base.allDay ? dOf(base.end - DAY) : dOf(base.start));
   $("#ed-loc").value = preset.location ?? base.location ?? "";
-  $("#ed-notes").value = preset.notes ?? (ev ? base.desc : "") ?? "";
+  $("#ed-notes").value = (preset.notes ?? (ev ? base.desc : "") ?? "").replace(FLEX, "").trim();
+  $("#ed-flex").checked = preset.flex ?? (ev ? isMovable(ev) : false); $("#ed-flex").disabled = !!(ev && isTempoStudy(ev));
   $("#ed-cal").innerHTML = writableCals().map((c) => `<option value="${esc(c.id)}">${esc(c.summary)}</option>`).join("");
   $("#ed-cal").value = ev ? ev.calId : targetCal().id;
   $("#ed-cal-l").hidden = true;
@@ -1305,7 +1318,7 @@ function openEditor(ev, preset = {}) {
 }
 function readEditor() {
   const v = { title: $("#ed-title").value.trim() || "(no title)", allDay: $("#ed-allday").checked, date: $("#ed-date").value,
-    location: $("#ed-loc").value.trim(), notes: $("#ed-notes").value, color: ed.color, calId: $("#ed-cal").value };
+    location: $("#ed-loc").value.trim(), notes: withFlex($("#ed-notes").value, $("#ed-flex").checked), color: ed.color, calId: $("#ed-cal").value };
   if (!v.date) return { error: "Pick a date." };
   if (v.allDay) {
     const last = $("#ed-enddate").value || v.date;
@@ -1437,7 +1450,142 @@ document.addEventListener("keydown", (e) => {
 });
 $("#new-ev").addEventListener("click", () => { if (!mcp) return toast("Connect Google Calendar first."); openEditor(null); });
 
-// quick add: Claude turns a phrase into a prefilled editor you confirm
+// ---------------------------------------------------------------- Ask Tempo: add, find time, rearrange
+// Claude works out what you mean; Tempo's own scheduler picks the times (free, habit-scored, travel-aware)
+// and only ever moves movable things. Nothing changes until you tap Apply.
+let plan = null;
+/** Your regular events, so "working for Finn on Saturday" can borrow how long Finn shifts usually are. */
+function usualEvents() {
+  const g = new Map();
+  for (const e of events) {
+    if (e.allDay || /^Tempo check-in/.test(e.title)) continue;
+    const k = norm(e.title); if (!k) continue;
+    if (!g.has(k)) g.set(k, { title: e.title, n: 0, durs: [], starts: {}, days: {}, loc: {} });
+    const x = g.get(k), p = lp(e.start); x.n++; x.durs.push((e.end - e.start) / MIN);
+    const st = `${pad(p.hour)}:${pad(p.minute)}`; x.starts[st] = (x.starts[st] || 0) + 1; x.days[DAYS[p.dow]] = (x.days[DAYS[p.dow]] || 0) + 1;
+    if (e.location) x.loc[e.location] = (x.loc[e.location] || 0) + 1;
+  }
+  const top = (o) => Object.entries(o).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  return [...g.values()].filter((x) => x.n >= 2).sort((a, b) => b.n - a.n).slice(0, 40).map((x) => {
+    const d = x.durs.sort((a, b) => a - b)[Math.floor(x.durs.length / 2)];
+    return `${x.title} — usually ${Math.floor(d / 60) ? `${Math.floor(d / 60)}h ` : ""}${Math.round(d % 60) ? `${Math.round(d % 60)}m` : ""}, often ${top(x.days)} at ${top(x.starts)}${top(x.loc) ? `, at ${top(x.loc)}` : ""} (${x.n} times)`;
+  }).join("\n");
+}
+function upcomingItems() {
+  const now = Date.now(), until = now + 14 * DAY;
+  const evs = events.filter((e) => e.end > now && e.start < until && !/^Tempo check-in/.test(e.title))
+    .map((e) => ({ id: e.key, kind: "event", ev: e, start: e.start, end: e.end, allDay: e.allDay, title: e.title, location: e.location, movable: !e.allDay && isMovable(e) }));
+  const props = S.proposals.filter((p) => p.status === "proposed" && p.end > now)
+    .map((p) => ({ id: "p|" + p.id, kind: "proposal", p, start: p.start, end: p.end, allDay: false, title: `📚 Study: ${p.subject} (suggested)`, location: "", movable: true }));
+  return evs.concat(props).sort((a, b) => a.start - b.start);
+}
+function busyFor(items, skip, extra) {
+  const home = studyPlace();
+  return items.filter((x) => !x.allDay && !skip.has(x.id) && !(x.ev && x.ev.free))
+    .map((x) => { const t = x.location ? travelMin(home, x.location) || 0 : 0; return [x.start - t * MIN, x.end + t * MIN]; })
+    .concat(extra);
+}
+/** Free slots that fit, best first: habit score, closeness to `near`, spread out. */
+function findSlots({ dur, from, to, earliest, latest, days, busy, near, limit = 5 }) {
+  const buf = S.settings.bufferMinutes * MIN, step = 15 * MIN, out = [];
+  const eh = earliest ?? S.settings.earliestHour, lh = latest ?? S.settings.latestHour;
+  for (let t = Math.ceil(Math.max(from, Date.now() + 15 * MIN) / step) * step; t + dur <= to; t += step) {
+    const a = lp(t), b = lp(t + dur - 1), sh = a.hour + a.minute / 60, en = b.hour + (b.minute + 1) / 60;
+    if (sh < eh || en > lh || a.key !== b.key) continue;
+    if (days && days.length && !days.includes(a.dow)) continue;
+    if (busy.some(([s, e]) => t < e + buf && t + dur > s - buf)) continue;
+    const sc = model ? score(t, t + dur) : { score: 0, why: [] };
+    out.push({ start: t, end: t + dur, score: sc.score - (near ? 0.12 * Math.abs(t - near) / DAY : 0), why: sc.why });
+  }
+  out.sort((x, y) => y.score - x.score);
+  const picks = [];
+  for (const c of out) { if (picks.some((p) => c.start < p.end + 30 * MIN && c.end > p.start - 30 * MIN)) continue; picks.push(c); if (picks.length >= limit) break; }
+  return picks;
+}
+const hm = (s) => { const m = String(s || "").match(/^(\d{1,2}):(\d{2})/); return m ? +m[1] + +m[2] / 60 : null; };
+const dayCodes = (arr) => (Array.isArray(arr) ? arr : []).map((d) => ({ MO: 0, TU: 1, WE: 2, TH: 3, FR: 4, SA: 5, SU: 6 }[String(d).slice(0, 2).toUpperCase()])).filter((d) => d != null);
+const dateMs = (d, end) => { const t = new Date(`${d}T${end ? "23:59" : "00:00"}`).getTime(); return Number.isFinite(t) ? t : null; };
+
+/** Work out moves for anything movable that the new things land on; warn about the rest. */
+function arrange(p) {
+  const items = upcomingItems(), adds = p.adds.filter((a) => !a.allDay && a.end > a.start);
+  const addIv = adds.map((a) => { const t = a.location ? travelMin(studyPlace(), a.location) || 0 : 0; return [a.start - t * MIN, a.end + t * MIN]; });
+  const hit = (x) => !x.allDay && addIv.some(([s, e]) => x.start < e && x.end > s);
+  p.moves = []; p.clashes = []; p.unplaced = [];
+  const bumped = items.filter((x) => hit(x));
+  const toMove = bumped.filter((x) => x.movable).concat((p.moveIds || []).map((id) => items.find((x) => x.id === id && x.movable)).filter((x) => x && !bumped.includes(x)));
+  p.clashes = bumped.filter((x) => !x.movable);
+  const skip = new Set(toMove.map((x) => x.id)), chosen = [];
+  for (const x of toMove) {
+    const w = p.moveWindow || {};
+    const from = w.from ?? Date.now(), to = w.to ?? Math.max(x.end + 3 * DAY, Date.now() + 2 * DAY);
+    const slot = findSlots({ dur: x.end - x.start, from, to: Math.min(to, Date.now() + 21 * DAY), earliest: w.earliest, latest: w.latest, days: w.days,
+      busy: busyFor(items, skip, addIv.concat(chosen)), near: w.from ? null : x.start, limit: 1 })[0];
+    if (slot) { p.moves.push({ item: x, to: slot }); chosen.push([slot.start, slot.end]); } else p.unplaced.push(x);
+  }
+  return p;
+}
+function fmtRange(a, b) { return `${fShort(a)}, ${fTime(a)}–${fTime(b)}`; }
+function renderPlan() {
+  const el = $("#ask-plan"); if (!plan) { el.innerHTML = ""; return; }
+  const rows = [];
+  plan.adds.forEach((a, i) => rows.push(`<div class="prow"><span class="ic">+</span><div><b>${esc(a.title)}</b>${a.location ? ` <span class="muted">· ${esc(a.location)}</span>` : ""}
+    ${a.allDay ? `<div class="small muted">${esc(fShort(a.start))}, all day</div>` : `<div class="times"><input class="input" type="date" id="pa-d-${i}" value="${dOf(a.start)}" aria-label="Date"><input class="input" type="time" id="pa-s-${i}" value="${tOf(a.start)}" aria-label="Start"><input class="input" type="time" id="pa-e-${i}" value="${tOf(a.end)}" aria-label="End"></div>`}
+    ${a.note ? `<div class="small muted">${esc(a.note)}</div>` : ""}</div></div>`));
+  for (const m of plan.moves) rows.push(`<div class="prow"><span class="ic">↪</span><div><b>${esc(m.item.title)}</b><div class="small"><s>${esc(fmtRange(m.item.start, m.item.end))}</s> → ${esc(fmtRange(m.to.start, m.to.end))}</div>${m.to.why?.length ? `<div class="small muted">${esc(m.to.why[0])}</div>` : ""}</div></div>`);
+  for (const x of plan.unplaced) rows.push(`<div class="prow warn"><span class="ic">!</span><div>No free time found for <b>${esc(x.title)}</b> in that window, so it stays at ${esc(fmtRange(x.start, x.end))}.</div></div>`);
+  for (const x of plan.clashes) rows.push(`<div class="prow warn"><span class="ic">!</span><div>Clashes with <b>${esc(x.title)}</b> (${esc(fmtRange(x.start, x.end))}), which Tempo won't move. Both will be kept.</div></div>`);
+  (plan.options || []).forEach((o, i) => rows.push(`<div class="prow"><span class="ic">${i + 1}</span><div><b>${esc(fmtRange(o.start, o.end))}</b>${o.why?.length ? `<div class="small muted">${esc(o.why[0])}</div>` : ""}
+    <div class="row" style="margin-top:6px"><button class="btn small primary" data-book="${i}">Book this</button></div></div></div>`));
+  const actionable = plan.adds.length || plan.moves.length;
+  el.innerHTML = `<div class="card stack plan" aria-live="polite"><div>${esc(plan.reply || "")}</div>${rows.join("")}
+    <div class="row">${actionable ? `<button class="btn primary" id="plan-apply">Apply</button>` : ""}<button class="btn" id="plan-cancel">${actionable ? "Cancel" : "Close"}</button></div></div>`;
+}
+$("#ask-plan").addEventListener("change", (e) => {
+  const m = e.target.id.match(/^pa-[dse]-(\d+)$/); if (!m || !plan) return;
+  const i = +m[1], a = plan.adds[i], d = $(`#pa-d-${i}`).value, st = $(`#pa-s-${i}`).value, en = $(`#pa-e-${i}`).value;
+  if (!d || !st || !en) return;
+  a.start = new Date(`${d}T${st}`).getTime(); a.end = new Date(`${en > st ? d : addDays(d, 1)}T${en}`).getTime();
+  arrange(plan); renderPlan();
+});
+$("#ask-plan").addEventListener("click", (e) => {
+  if (e.target.id === "plan-cancel") { plan = null; renderPlan(); return; }
+  if (e.target.id === "plan-apply") return busy(e.target, "Applying", applyPlan);
+  const bk = e.target.closest("[data-book]");
+  if (bk && plan?.options) {
+    const o = plan.options[+bk.dataset.book];
+    plan = { reply: `Booking ${o.title}.`, adds: [{ title: o.title, start: o.start, end: o.end, location: "", flex: true }], moves: [], clashes: [], unplaced: [] };
+    busy(bk, "Booking", applyPlan);
+  }
+});
+async function applyPlan() {
+  const cal = targetCal(), done = { created: [], moved: [], local: [] };
+  try {
+    for (const a of plan.adds) {
+      const startTime = a.allDay ? `${dOf(a.start)}T00:00:00` : localISO(a.start), endTime = a.allDay ? `${dOf(a.end > a.start ? a.end : a.start + DAY)}T00:00:00` : localISO(a.end);
+      const r = await gcal("create_event", { calendarId: cal.id, summary: a.title, startTime, endTime, allDay: !!a.allDay,
+        location: a.location || undefined, description: a.flex ? FLEX : (a.desc || undefined) });
+      done.created.push({ id: idOf(r), title: a.title, startMs: a.start });
+    }
+    for (const m of plan.moves) {
+      if (m.item.kind === "proposal") { done.local.push({ p: m.item.p, start: m.item.p.start, end: m.item.p.end }); m.item.p.start = m.to.start; m.item.p.end = m.to.end; continue; }
+      const ev = m.item.ev;
+      await gcal("update_event", { calendarId: ev.calId, eventId: ev.id, startTime: localISO(m.to.start), endTime: localISO(m.to.end) });
+      done.moved.push({ ev, start: ev.start, end: ev.end });
+      const pr = proposalFor(ev); if (pr) { done.local.push({ p: pr, start: pr.start, end: pr.end }); pr.start = m.to.start; pr.end = m.to.end; }
+    }
+  } catch (err) { toast(`Stopped part-way: ${connectorError(err)}. Undo puts back what was done.`, 6000); }
+  save();
+  const label = [done.created.length && `Added ${done.created.map((c) => c.title).join(", ")}`, (done.moved.length + done.local.filter((l) => !done.moved.some((m) => proposalFor(m.ev) === l.p)).length) && `moved ${plan.moves.length}`].filter(Boolean).join(", ") || "Done";
+  plan = null; renderPlan();
+  pushUndo(label, async () => {
+    for (const c of done.created) await deleteCreated(cal.id, c.id, c.title, c.startMs, true);
+    for (const m of done.moved) await gcal("update_event", { calendarId: m.ev.calId, eventId: m.ev.id, startTime: localISO(m.start), endTime: localISO(m.end) });
+    for (const l of done.local) { l.p.start = l.start; l.p.end = l.end; }
+    save(); await afterWrite();
+  });
+  await afterWrite();
+}
 $("#qa").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = $("#qa-text").value.trim(); if (!text) return;
@@ -1445,16 +1593,51 @@ $("#qa").addEventListener("submit", (e) => {
   if (!sample) { openEditor(null, { title: text }); return; }
   busy($("#qa-btn"), "", async () => {
     try {
+      buildModel();
+      const items = upcomingItems(), wk = weekOf(dOf(Date.now()));
       const r = await sample.json(
-        `Turn this into one calendar event. Now: ${new Date().toLocaleString([], { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${tz}).\n` +
-        `Text: ${JSON.stringify(text)}\nIf no time is given, make it all day. If only a start is given, make it 1 hour. Resolve weekdays to the next upcoming one.\n` +
-        `Reply with only JSON: {"title":"","date":"YYYY-MM-DD","start":"HH:MM or empty","end":"HH:MM or empty","location":""}`,
-        { modelTier: "quick", cache: false });
-      const timed = /^\d{2}:\d{2}$/.test(r?.start || "");
-      openEditor(null, { title: r?.title || text, date: /^\d{4}-\d{2}-\d{2}$/.test(r?.date || "") ? r.date : undefined, allDay: !timed,
-        start: timed ? r.start : undefined, end: /^\d{2}:\d{2}$/.test(r?.end || "") ? r.end : undefined, endDate: r?.date, location: r?.location || "" });
-      $("#qa-text").value = "";
-    } catch (err) { toast(sampleMessage(err), 4000); openEditor(null, { title: text }); }
+        `You help a student manage their calendar. Now: ${new Date().toLocaleString([], { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${tz}).` +
+        (wk ? ` This week is Week ${wk}.` : "") + `\n\nTheir regular events (use these to fill in unknown details, e.g. how long a shift for the same employer usually lasts):\n${usualEvents() || "(none yet)"}\n\n` +
+        `Their next two weeks (id | when | title | movable):\n` +
+        items.slice(0, 120).map((x) => `${x.id} | ${x.allDay ? `${fShort(x.start)} all day` : fmtRange(x.start, x.end)} | ${x.title} | ${x.movable ? "movable" : "fixed"}`).join("\n") +
+        `\n\nThe student says: ${JSON.stringify(text)}\n\n` +
+        `Work out what they want. Rules:\n` +
+        `- "add": new commitments. Resolve days to the next upcoming one. If they give a start but no end, or no time at all, estimate from similar regular events ` +
+        `(same employer, person or activity); otherwise use a typical length (dinner about 2.5h from 18:30). If the time isn't confirmed ("don't know yet", "probably", "assume"), ` +
+        `set tentative true. Title work as "Shift: <employer or workplace>" when it matches how their shifts are named; reuse an existing location when it clearly matches.\n` +
+        `- "find": they want free time found ("find", "when can I", "fit in"). Give what it's for, the minutes needed, how many blocks, and limits.\n` +
+        `- "move": they want existing movable items moved; give their ids and the window to move them into. Never list fixed items.\n` +
+        `Reply with only JSON, leaving out keys that don't apply:\n` +
+        `{"reply":"one short friendly sentence","add":[{"title":"","start":"YYYY-MM-DDTHH:MM","end":"YYYY-MM-DDTHH:MM","all_day":false,"location":"","tentative":false,"how":"what you assumed, in a few words"}],` +
+        `"find":{"title":"","minutes":60,"count":1,"from":"YYYY-MM-DD","to":"YYYY-MM-DD","earliest":"HH:MM","latest":"HH:MM","days":["MO"]},` +
+        `"move":{"ids":[""],"from":"YYYY-MM-DD","to":"YYYY-MM-DD","earliest":"HH:MM","latest":"HH:MM","days":["SA"]}}`,
+        { modelTier: "default", cache: false });
+      const p = { reply: r?.reply || "", adds: [], moves: [], clashes: [], unplaced: [], options: [] };
+      for (const a of Array.isArray(r?.add) ? r.add : []) {
+        const allDay = !!a.all_day || /^\d{4}-\d{2}-\d{2}$/.test(a.start || "");
+        const st = parseLocal(a.start); let en = parseLocal(a.end || a.start);
+        if (!Number.isFinite(st)) continue;
+        if (!(en > st)) en = st + (allDay ? DAY : HOUR);
+        const title = String(a.title || text).slice(0, 120) + (a.tentative && !/TBC/i.test(a.title || "") ? " (time TBC)" : "");
+        p.adds.push({ title, start: st, end: en, allDay, location: String(a.location || ""), note: [a.how, a.tentative ? "Time not confirmed yet, so it's marked TBC." : ""].filter(Boolean).join(" "),
+          desc: a.tentative ? "Time to be confirmed." : undefined });
+      }
+      if (r?.move?.ids?.length) {
+        p.moveIds = r.move.ids.filter((id) => items.some((x) => x.id === id && x.movable));
+        p.moveWindow = { from: r.move.from ? dateMs(r.move.from) : null, to: r.move.to ? dateMs(r.move.to, true) : null, earliest: hm(r.move.earliest), latest: hm(r.move.latest), days: dayCodes(r.move.days) };
+      }
+      arrange(p);
+      if (r?.find?.minutes) {
+        const f = r.find, dur = Math.max(15, Math.min(8 * 60, +f.minutes || 60)) * MIN;
+        const title = /study|revis|homework|essay|assignment|exam|test|practice|read/i.test(f.title || "") ? `📚 Study: ${String(f.title).replace(/^study( for)?:?\s*/i, "")}` : `🧱 ${f.title || "Focus time"}`;
+        p.options = findSlots({ dur, from: f.from ? dateMs(f.from) : Date.now(), to: f.to ? dateMs(f.to, true) : Date.now() + 7 * DAY,
+          earliest: hm(f.earliest), latest: hm(f.latest), days: dayCodes(f.days), busy: busyFor(items, new Set(), []), limit: Math.max(3, Math.min(6, (+f.count || 1) * 3)) })
+          .map((o) => ({ ...o, title }));
+        if (!p.options.length) p.reply = (p.reply ? p.reply + " " : "") + "I couldn't find a free block that fits. Try a longer window or a shorter block.";
+      }
+      if (!p.adds.length && !p.moves.length && !p.options.length && !p.unplaced.length) p.reply = p.reply || "I couldn't work out a change to make from that. Try saying what, when and how long.";
+      plan = p; renderPlan(); $("#qa-text").value = "";
+    } catch (err) { toast(err?.code ? sampleMessage(err) : (err?.message || "Something went wrong."), 5000); }
   });
 });
 
