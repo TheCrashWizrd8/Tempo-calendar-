@@ -412,19 +412,98 @@ function toast(msg, ms = 3000, undoable = false) {
 }
 function banner(html) { const b = $("#banner"); b.innerHTML = html; b.hidden = !html; }
 
+// ---------------------------------------------------------------- saving, synced across devices
+// Each kind of state is its own document (state/<key>) and each study session its own document
+// (proposals/<id>), so two open copies of Tempo can't overwrite each other's changes. Every copy listens
+// for changes live, and nothing is written until this device has loaded what's already saved.
+const DEFAULT_SETTINGS = JSON.parse(JSON.stringify(S.settings));
+const STATE_KEYS = ["settings", "places", "titleCats", "travel", "leaveSet", "revision", "dismissed"];
+let rootRef = null, stateCol = null, propsCol = null, storeReady = false, clearOld = false;
+const synced = {}, syncedProps = new Map();
 let saveTimer = null, saving = Promise.resolve();
+const js = (v) => JSON.stringify(v ?? null);
 function save() {
-  if (!stateRef) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    S.proposals = S.proposals.slice(-300);
-    const keys = Object.keys(S.titleCats);
-    if (keys.length > 1500) for (const k of keys.slice(0, keys.length - 1500)) delete S.titleCats[k];
-    const snapshot = JSON.parse(JSON.stringify(S));
-    saving = saving.then(() => stateRef.set(snapshot)).catch((e) => {
-      if (e?.code === "quota_exceeded") toast("Storage is full. Delete some places to free space.");
-    });
-  }, 600);
+  saveTimer = setTimeout(() => { saving = saving.then(flush).catch(saveFailed); }, 500);
+}
+function saveFailed(e) {
+  if (e?.code === "quota_exceeded") toast("Tempo's storage is full. Forget a few old places to free space.", 6000);
+  else if (e?.code && e.code !== "unavailable") toast("Couldn't save that change. It'll be retried next time something changes.", 5000);
+}
+async function flush() {
+  if (!storeReady) return; // never write over saved data we haven't loaded yet
+  S.proposals = S.proposals.filter((p) => p.status === "proposed" || p.end > Date.now() - 120 * DAY).slice(-300);
+  const keys = Object.keys(S.titleCats);
+  if (keys.length > 1500) for (const k of keys.slice(0, keys.length - 1500)) delete S.titleCats[k];
+  for (const k of STATE_KEYS) {
+    const j = js(S[k]); if (synced[k] === j) continue;
+    await stateCol.doc(k).set({ v: JSON.parse(j) }); synced[k] = j;
+  }
+  const ids = new Set();
+  for (const p of S.proposals) {
+    ids.add(p.id); const j = js(p); if (syncedProps.get(p.id) === j) continue;
+    await propsCol.doc(p.id).set(JSON.parse(j)); syncedProps.set(p.id, j);
+  }
+  for (const id of [...syncedProps.keys()]) if (!ids.has(id)) { await propsCol.doc(id).delete(); syncedProps.delete(id); }
+  if (clearOld) { clearOld = false; await rootRef.set({ moved: Date.now() }).catch(() => {}); } // old one-block format, now copied over
+}
+let renderSoon = null;
+const rerender = () => { clearTimeout(renderSoon); renderSoon = setTimeout(() => { if (loadedAt) { render(); termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms(); } }, 250); };
+function applyState(snap) {
+  let changed = false;
+  for (const d of snap.docs) {
+    const k = d.id; if (!STATE_KEYS.includes(k)) continue;
+    const v = d.data()?.v, j = js(v);
+    if (synced[k] === j) continue;
+    if (synced[k] !== undefined && js(S[k]) !== synced[k]) continue; // you changed it here too: this device's save wins
+    S[k] = k === "settings" ? { ...DEFAULT_SETTINGS, ...(v || {}) } : (v ?? S[k]);
+    synced[k] = j; changed = true;
+  }
+  if (changed && storeReady) rerender();
+}
+function applyProps(snap) {
+  let changed = false; const seen = new Set();
+  for (const d of snap.docs) {
+    const p = d.data(), id = d.id, j = js(p); seen.add(id);
+    if (!p || syncedProps.get(id) === j) continue;
+    const i = S.proposals.findIndex((x) => x.id === id);
+    if (i >= 0 && syncedProps.has(id) && js(S.proposals[i]) !== syncedProps.get(id)) continue; // edited here, not saved yet
+    if (i >= 0) S.proposals[i] = p; else S.proposals.push(p);
+    syncedProps.set(id, j); changed = true;
+  }
+  if (!snap.metadata?.fromCache) {
+    for (const id of [...syncedProps.keys()]) if (!seen.has(id)) { // deleted on another device
+      const i = S.proposals.findIndex((x) => x.id === id);
+      if (i >= 0 && js(S.proposals[i]) === syncedProps.get(id)) { S.proposals.splice(i, 1); changed = true; }
+      syncedProps.delete(id);
+    }
+  }
+  if (changed) { S.proposals.sort((a, b) => a.start - b.start); if (storeReady) rerender(); }
+}
+/** Subscribe once, wait for both first answers (max 10 s), move old-format data over if needed. */
+function startSync() {
+  rootRef = db.doc(`data/users/${uid}/tempo`); stateRef = rootRef;
+  stateCol = rootRef.collection("state"); propsCol = rootRef.collection("proposals");
+  return new Promise((resolve) => {
+    let gotState = false, gotProps = false, failed = false, finished = false;
+    const finish = () => { if (!finished) { finished = true; clearTimeout(timer); resolve(); } };
+    const timer = setTimeout(() => { if (!storeReady) toast("Your saved Tempo data hasn't loaded yet, so changes on this device won't be saved until it does.", 7000); finish(); }, 10000);
+    const ready = async () => {
+      if (!gotState || !gotProps || storeReady || failed) return;
+      if (!Object.keys(synced).length && !syncedProps.size) {
+        const old = await rootRef.get().catch(() => null), d = old?.exists ? old.data() : null;
+        if (d && (d.settings || d.proposals)) {
+          for (const k of STATE_KEYS) if (d[k] !== undefined) S[k] = k === "settings" ? { ...DEFAULT_SETTINGS, ...d.settings } : d[k];
+          S.proposals = Array.isArray(d.proposals) ? d.proposals : [];
+          clearOld = true;
+        }
+      }
+      storeReady = true; finish(); save();
+    };
+    const fail = () => { failed = true; toast("Tempo can't reach its saved data right now. Changes on this device won't be saved.", 7000); finish(); };
+    stateCol.onSnapshot((snap) => { applyState(snap); gotState = true; ready(); }, fail);
+    propsCol.onSnapshot((snap) => { applyProps(snap); gotProps = true; ready(); }, fail);
+  });
 }
 
 // ---------------------------------------------------------------- time helpers
@@ -2320,13 +2399,8 @@ function renderExtracted() {
   uid = userNs ? await userNs.id().catch(() => null) : null;
   myName = userNs ? ((await userNs.me?.().catch(() => null))?.name || "") : "";
   if (db && uid) {
-    stateRef = db.doc(`data/users/${uid}/tempo`);
-    try {
-      const snap = await Promise.race([stateRef.get(), new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), 10000))]);
-      const d = snap.exists ? snap.data() : null;
-      if (d) { Object.assign(S.settings, d.settings || {}); S.places = d.places || []; S.titleCats = d.titleCats || {}; S.proposals = d.proposals || []; S.travel = d.travel || {}; S.settings.terms = S.settings.terms || [];
-        S.leaveSet = d.leaveSet || {}; S.revision = d.revision || {}; S.dismissed = d.dismissed || {}; }
-    } catch { /* first visit or slow store: start fresh, saves will catch up */ }
+    await startSync();
+    S.settings.terms = S.settings.terms || [];
   }
   termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms();
   if (!mcp) {
