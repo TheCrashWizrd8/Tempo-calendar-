@@ -247,6 +247,15 @@ details.card summary { cursor: pointer; font-weight: 500; }
       </div>
     </div>
 
+    <h3>One calendar</h3>
+    <div class="card stack">
+      <p class="small">New events always go to your main calendar. You can also move what's already in your other calendars into it.</p>
+      <fieldset style="border:0;padding:0;margin:0"><legend class="small muted" style="margin-bottom:4px">Move events from</legend><div id="move-cals" class="row"></div></fieldset>
+      <label class="row small" style="gap:6px"><input type="checkbox" id="move-color" checked> Give each old calendar's events their own color</label>
+      <p class="small muted">Tempo copies each event into your main calendar, then removes the original. Repeating events move as a whole series, so a one-off change to a single lesson goes back to the usual pattern. Events other people invited you to stay where they are. Anyone you share these calendars with will stop seeing the moved events. You can undo the move.</p>
+      <div class="row"><button class="btn primary" id="move-go" type="button">Check what would move</button><span id="move-status" class="small muted" role="status"></span></div>
+    </div>
+
     <h3>School terms</h3>
     <div class="card stack">
       <p class="small muted">Imported classes repeat only inside these dates, and fortnightly timetables line up with Week A and Week B.</p>
@@ -263,7 +272,7 @@ details.card summary { cursor: pointer; font-weight: 500; }
       <label>Earliest start (hour)<input class="input" id="s-early" type="number" min="0" max="23"></label>
       <label>Latest finish (hour)<input class="input" id="s-late" type="number" min="1" max="24"></label>
       <label>Gap around events (minutes)<input class="input" id="s-buf" type="number" min="0" step="5"></label>
-      <label>Add study sessions to<select class="input" id="s-cal"></select></label>
+      <label>New events go to<select class="input" id="s-cal"></select></label>
       <label class="wide">Subjects (comma separated)<input class="input" id="s-subjects" placeholder="Maths, Physics, English"></label>
       <label class="wide">Where you usually study (used for drive times)<input class="input" id="s-place" list="place-list" placeholder="Home"><datalist id="place-list"></datalist></label>
       <fieldset class="wide" style="border:0;padding:0;margin:0"><legend class="small muted" style="margin-bottom:4px">Calendars to learn from</legend><div id="s-cals" class="row"></div></fieldset>
@@ -400,9 +409,14 @@ function mcpMessage(e) {
 }
 async function gcal(tool, input, opts) { return (await mcp.callTool(GCAL, tool, input, opts)).payload; }
 
-async function listAll(calendarId, from, to, refresh) {
+function mainCal() { return cals.find((c) => c.primary) || cals.find((c) => /@gmail\.com$|@googlemail\.com$/.test(c.id)) || null; }
+function targetCal() {
+  const c = cals.find((x) => x.id === S.settings.studyCal) || mainCal() || { id: S.settings.studyCal, summary: "main" };
+  return { ...c, summary: /@/.test(c.summary || "") ? "main" : c.summary }; // your main calendar is named after your email address
+}
+async function listAll(calendarId, from, to, refresh, maxPages = 12) {
   const out = []; let pageToken;
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < maxPages; i++) {
     const p = await gcal("list_events", { calendarId, startTime: localISO(from), endTime: localISO(to), orderBy: "startTime", pageSize: 250, ...(pageToken ? { pageToken } : {}) },
       { cache: refresh ? { refresh: true, staleTime: 5 * MIN, gcTime: 30 * MIN } : { staleTime: 5 * MIN, gcTime: 30 * MIN } });
     out.push(...(p?.events || []));
@@ -427,7 +441,9 @@ async function loadCalendars(refresh = false) {
   relayCal = cals.find((c) => (c.summary || "").trim().toLowerCase() === RELAY_NAME) || null;
   const learnable = cals.filter((c) => c !== relayCal && !/holiday|#holiday@|birthdays/i.test(c.id + c.summary));
   if (!S.settings.learnCals) S.settings.learnCals = learnable.map((c) => c.id);
-  if (!S.settings.studyCal) S.settings.studyCal = (cals.find((c) => c.primary) || cals.find((c) => /@gmail\.com$|@googlemail\.com$/.test(c.id)) || learnable[0] || {}).id || "";
+  const main = mainCal() || learnable[0];
+  if (!S.settings.oneCal && main) { S.settings.studyCal = main.id; S.settings.oneCal = true; save(); } // everything new goes to your main calendar
+  if (!S.settings.studyCal) S.settings.studyCal = main?.id || "";
 }
 
 async function loadData(refresh = false) {
@@ -738,7 +754,6 @@ function renderInsights() {
   const writable = cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
   $("#s-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === st.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
   $("#s-cals").innerHTML = cals.filter((c) => c !== relayCal).map((c, i) => `<label class="row small" style="gap:6px;color:var(--ink)"><input type="checkbox" id="lc-${i}" value="${esc(c.id)}" ${st.learnCals.includes(c.id) ? "checked" : ""}>${esc(c.summary)}</label>`).join("");
-  $("#x-cal") && ($("#x-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === st.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join(""));
 }
 
 // ---------------------------------------------------------------- actions
@@ -749,7 +764,7 @@ async function busy(btn, label, fn) {
 async function refresh(force) {
   try {
     await loadCalendars(force); await loadData(force);
-    banner(""); render();
+    banner(""); render(); renderMoveCals();
   } catch (e) {
     banner(mcpMessage(e));
     if (!events.length) $("#agenda").innerHTML = `<div class="empty">Your calendar will show here once Google Calendar is connected.</div>`;
@@ -1113,9 +1128,9 @@ function openEditor(ev, preset = {}) {
   $("#ed-loc").value = preset.location ?? base.location ?? "";
   $("#ed-notes").value = preset.notes ?? (ev ? base.desc : "") ?? "";
   $("#ed-cal").innerHTML = writableCals().map((c) => `<option value="${esc(c.id)}">${esc(c.summary)}</option>`).join("");
-  $("#ed-cal").value = ev ? ev.calId : (S.settings.studyCal || writableCals()[0]?.id || "");
-  $("#ed-cal-l").hidden = !!ev;
-  $("#ed-cal-fixed").hidden = !ev; if (ev) $("#ed-cal-fixed").textContent = `In your ${ev.cal} calendar`;
+  $("#ed-cal").value = ev ? ev.calId : targetCal().id;
+  $("#ed-cal-l").hidden = true;
+  $("#ed-cal-fixed").hidden = false; $("#ed-cal-fixed").textContent = ev ? `In your ${ev.cal} calendar` : `Goes to your ${targetCal().summary} calendar`;
   $("#ed-scope-row").hidden = !(ev && ev.recurringId);
   $("#ed-del").hidden = !ev; $("#ed-del").textContent = "Delete"; $("#ed-dup").hidden = !ev;
   $("#ed-err").hidden = true;
@@ -1171,7 +1186,6 @@ $("#ed-dup").addEventListener("click", () => {
   $("#ed").close();
   openEditor(null, { title: v.title || src.title, allDay: v.allDay, date: v.date, start: $("#ed-start").value, end: $("#ed-end").value,
     endDate: $("#ed-enddate").value, location: v.location, notes: v.notes, color: v.color });
-  $("#ed-cal").value = src.calId;
 });
 $("#ed-del").addEventListener("click", (e) => {
   const b = e.currentTarget, ev = ed.ev; if (!ev) return;
@@ -1277,6 +1291,91 @@ $("#qa").addEventListener("submit", (e) => {
       $("#qa-text").value = "";
     } catch (err) { toast(sampleMessage(err), 4000); openEditor(null, { title: text }); }
   });
+});
+
+
+// ---------------------------------------------------------------- move everything into one calendar
+const MOVE_COLORS = ["7", "3", "6", "10", "4", "5", "9", "1", "8", "11"]; // "2" stays for study sessions
+let movePlan = null;
+function renderMoveCals() {
+  const main = targetCal(), others = writableCals().filter((c) => c.id !== main.id);
+  $("#move-cals").innerHTML = others.length ? others.map((c, i) => `<label class="row small" style="gap:6px;color:var(--ink)"><input type="checkbox" id="mv-${i}" value="${esc(c.id)}" checked>${esc(c.summary)}</label>`).join("")
+    : `<span class="small muted">You only have one calendar. Nothing to move.</span>`;
+  $("#move-go").disabled = !others.length; $("#move-go").textContent = "Check what would move"; movePlan = null;
+}
+function copyInput(e, calendarId, color) {
+  const allDay = !!e.start?.date;
+  return { calendarId, summary: e.summary || "(no title)", allDay,
+    startTime: allDay ? `${e.start.date}T00:00:00` : localISO(Date.parse(e.start.dateTime)),
+    endTime: allDay ? `${(e.end || e.start).date}T00:00:00` : localISO(Date.parse((e.end || e.start).dateTime)),
+    location: e.location || undefined, description: e.description || undefined, colorId: e.colorId || color || undefined,
+    recurrenceData: Array.isArray(e.recurrence) && e.recurrence.length ? e.recurrence : undefined,
+    availability: e.transparency === "transparent" ? "AVAILABILITY_FREE" : undefined };
+}
+async function scanMove(ids) {
+  const from = Date.now() - 180 * DAY, to = Date.now() + 400 * DAY, items = [], skipped = [];
+  for (const id of ids) {
+    const cal = cals.find((c) => c.id === id); if (!cal) continue;
+    const seen = new Set();
+    for (const e of await listAll(id, from, to, true, 40)) {
+      if (e.status === "cancelled") continue;
+      if (e.organizer?.self === false || (e.attendees || []).some((a) => !a.self)) { skipped.push(e.summary || "(no title)"); continue; }
+      if (e.recurringEventId) { if (!seen.has(e.recurringEventId)) { seen.add(e.recurringEventId); items.push({ cal, series: true, id: e.recurringEventId, sample: e }); } }
+      else items.push({ cal, series: false, id: e.id, raw: e });
+    }
+  }
+  return { items, skipped };
+}
+$("#move-go").addEventListener("click", (ev) => {
+  const btn = ev.currentTarget;
+  const ids = [...document.querySelectorAll("#move-cals input:checked")].map((i) => i.value);
+  if (!ids.length) return toast("Tick at least one calendar to move from.");
+  if (!movePlan || movePlan.key !== ids.join("|")) {
+    return busy(btn, "Checking", async () => {
+      try {
+        const plan = await scanMove(ids);
+        movePlan = { key: ids.join("|"), ...plan };
+        const singles = plan.items.filter((x) => !x.series).length, series = plan.items.length - singles;
+        $("#move-status").textContent = plan.items.length
+          ? `Found ${singles} event${singles === 1 ? "" : "s"} and ${series} repeating series${plan.skipped.length ? `, plus ${plan.skipped.length} invitations that will stay put` : ""}.`
+          : "Nothing to move from those calendars.";
+        btn.dataset.label = plan.items.length ? `Move ${plan.items.length} into your ${targetCal().summary} calendar` : "Check what would move";
+      } catch (e) { $("#move-status").textContent = connectorError(e); }
+    }).then(() => { if (btn.dataset.label) btn.textContent = btn.dataset.label; });
+  }
+  if (!movePlan.items.length) return;
+  busy(btn, "Moving", async () => {
+    const main = targetCal(), colorOn = $("#move-color").checked, moved = [], failed = [];
+    const colorFor = (cal) => colorOn ? MOVE_COLORS[writableCals().filter((c) => c.id !== main.id).findIndex((c) => c.id === cal.id) % MOVE_COLORS.length] : undefined;
+    const before = snapshotS();
+    for (const [n, item] of movePlan.items.entries()) {
+      $("#move-status").textContent = `Moving ${n + 1} of ${movePlan.items.length}…`;
+      try {
+        let src = item.series ? await gcal("get_event", { calendarId: item.cal.id, eventId: item.id }) : item.raw;
+        src = src?.event || src;
+        if (item.series && !(Array.isArray(src?.recurrence) && src.recurrence.length)) { failed.push(item.sample?.summary || "a repeating event"); continue; }
+        // keep what Tempo knows about these events (e.g. School classes count as classes) after they leave that calendar
+        const known = catOf(toEvent(src, item.cal) || { title: src.summary || "", cal: item.cal.summary });
+        if (known && src.summary && !S.titleCats[src.summary]) S.titleCats[src.summary] = known;
+        const input = copyInput(src, main.id, colorFor(item.cal));
+        const r = await gcal("create_event", input);
+        const copy = { id: idOf(r), title: input.summary, startMs: new Date(input.startTime).getTime() };
+        try { await gcal("delete_event", { calendarId: item.cal.id, eventId: item.id, notificationLevel: "NONE" }); }
+        catch (e) { await deleteCreated(main.id, copy.id, copy.title, copy.startMs, true).catch(() => {}); failed.push(input.summary); continue; }
+        moved.push({ back: { ...copyInput(src, item.cal.id), colorId: src.colorId || undefined }, copy });
+      } catch (e) {
+        failed.push(item.sample?.summary || item.raw?.summary || "an event");
+        if (e?.code && e.code !== "tool_error") { toast(connectorError(e), 6000); break; }
+      }
+    }
+    save(); movePlan = null;
+    $("#move-status").textContent = `Moved ${moved.length}.` + (failed.length ? ` ${failed.length} couldn't be moved: ${failed.slice(0, 5).join(", ")}${failed.length > 5 ? "…" : ""}.` : "");
+    if (moved.length) pushUndo(`Moved ${moved.length} into your ${main.summary} calendar`, async () => {
+      for (const m of moved) { await gcal("create_event", m.back); await deleteCreated(main.id, m.copy.id, m.copy.title, m.copy.startMs, true); }
+      restoreS(before); await afterWrite();
+    });
+    await afterWrite();
+  }).then(renderMoveCals);
 });
 
 // ---------------------------------------------------------------- school terms & fortnightly timetables
@@ -1452,10 +1551,9 @@ function renderExtracted() {
   const idx = extracted.map((_, i) => i), main = idx.filter((i) => extracted[i].match?.kind !== "dup"), dups = idx.filter((i) => extracted[i].match?.kind === "dup");
   $("#extracted").innerHTML = main.map((i) => xCard(extracted[i], i)).join("") +
     (dups.length ? `<details class="card"><summary>${dups.length} already in your calendar, skipped</summary><div class="stack" style="margin-top:10px">${dups.map((i) => xCard(extracted[i], i)).join("")}</div></details>` : "") +
-    `<div class="row"><label class="small muted" for="x-cal">Add new events to</label><select class="input" id="x-cal" style="width:auto"></select><button class="btn primary" id="x-add">Add selected</button></div>`;
-  $("#x-cal").innerHTML = writableCals().map((c) => `<option value="${esc(c.id)}" ${c.id === S.settings.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
+    `<div class="row"><button class="btn primary" id="x-add">Add selected</button><span class="small muted">to your ${esc(targetCal().summary)} calendar</span></div>`;
   $("#x-add").addEventListener("click", (e) => busy(e.currentTarget, "Adding", async () => {
-    const calId = $("#x-cal").value, created = [], updated = [], done = new Set(); let fail = 0;
+    const calId = targetCal().id, created = [], updated = [], done = new Set(); let fail = 0;
     for (let i = 0; i < extracted.length; i++) {
       if (!$(`#xp-${i}`).checked) continue;
       const x = extracted[i];
