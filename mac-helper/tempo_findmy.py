@@ -248,17 +248,19 @@ def login_server() -> None:
 # ------------------------------------------------------------------ MCP server for the Tempo page
 def mcp_server() -> None:
     from mcp.server.fastmcp import FastMCP
+    from mcp.types import ToolAnnotations
 
     app = FastMCP("tempo_location")
+    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
-    @app.tool()
+    @app.tool(annotations=read_only)
     def get_pings(since_ms: int = 0, limit: int = 20000) -> dict:
         """Location samples of the user's iPhone from Find My, oldest first. Each: ts (epoch ms), lat, lng, acc (metres)."""
         with db() as con:
             rows = con.execute("SELECT ts, lat, lng, acc FROM pings WHERE ts > ? ORDER BY ts LIMIT ?", (int(since_ms), int(limit))).fetchall()
         return {"pings": [{"ts": t, "lat": round(a, 5), "lng": round(b, 5), "acc": round(c or 0)} for t, a, b, c in rows]}
 
-    @app.tool()
+    @app.tool(annotations=read_only)
     def status() -> dict:
         """Whether the Find My helper is signed in and collecting, and when it last got a location."""
         s = load_state()

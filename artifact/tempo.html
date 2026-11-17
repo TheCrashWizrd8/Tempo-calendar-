@@ -200,7 +200,7 @@ details.card summary { cursor: pointer; font-weight: 500; }
     <h3>Location learning</h3>
     <div class="card stack">
       <div id="loc-status" class="status">Checking…</div>
-      <div class="row"><button class="btn primary" id="open-guide">Set up location learning</button><button class="btn" id="check-loc">Check now</button></div>
+      <div class="row"><button class="btn primary" id="fm-connect" hidden>Connect to Find My helper</button><button class="btn" id="open-guide">Set up location learning</button><button class="btn" id="check-loc">Check now</button></div>
     </div>
     <div id="guide" class="card" hidden style="margin-top:10px">
       <div class="row" style="justify-content:space-between">
@@ -479,9 +479,10 @@ async function loadData(refresh = false) {
 // local MCP server "tempo_location". It is only reachable when Tempo is open in the Claude desktop app on
 // that Mac, so new locations are copied into Tempo's own storage (one document per day) for every device.
 const FINDMY = "host:tempo_location";
-let macPings = [], macStatus = null, macReachable = false;
+let macPings = [], macStatus = null, macReachable = false, macError = null;
 const dayRef = (day) => db.doc(`data/users/${uid}/tempo`).collection("findmy").doc(day);
 async function loadFindMy() {
+  macError = null;
   if (db && uid) {
     try {
       const snap = await Promise.race([db.doc(`data/users/${uid}/tempo`).collection("findmy").get(), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), 10000))]);
@@ -508,7 +509,7 @@ async function loadFindMy() {
       } catch { /* saving failed: this visit still uses the new locations */ }
     }
   } catch (e) {
-    macReachable = false; // not in the Claude desktop app on that Mac, or the helper isn't installed
+    macReachable = false; macError = { code: e?.code || "error", message: e?.message || String(e) };
   }
 }
 function findMyLine() {
@@ -516,8 +517,19 @@ function findMyLine() {
   if (macStatus?.needs_login) return { warn: true, text: "Find My needs you to sign in to Apple again. On your Mac, ask Claude Code to run the Tempo helper's login command." };
   if (macReachable && macStatus?.last_error && !macStatus?.last_ping) return { warn: true, text: `The Find My helper on your Mac isn't getting locations yet: ${macStatus.last_error}` };
   if (last) return { text: `Following your iPhone through Find My on your Mac. Last location ${ago(last)}, ${macPings.length} in the last 8 weeks.${macReachable ? "" : " New locations come in when you open Tempo in the Claude app on your Mac."}` };
-  if (macReachable) return { text: "The Find My helper is installed. Waiting for its first location." };
-  return null;
+  if (macReachable) return { text: "The Find My helper is connected. Waiting for its first location." };
+  if (!mcp) return { warn: true, text: "Tempo can't use connectors in this view. Open it on claude.ai or in the Claude app." };
+  const code = macError?.code;
+  const why = {
+    server_not_connected: "Tempo can't see the Find My helper from here. It only works in the Claude desktop app on the Mac where the helper is installed, not in a browser or on your phone. If you are in that app, quit it fully (⌘Q) and open it again so it loads the helper.",
+    not_in_manifest: "Tempo isn't allowed to use the Find My helper yet. Tap Connect and choose Allow.",
+    approval_required: "Tempo needs your OK to use the Find My helper. Tap Connect and choose Allow.",
+    consent_required: "Tempo needs your OK to use the Find My helper. Tap Connect and choose Allow.",
+    cancelled: "The request to use the Find My helper was declined. Tap Connect to try again.",
+    tool_error: `The Find My helper answered with an error: ${macError?.message || ""}`,
+    server_unavailable: "The Find My helper didn't answer in time. Tap Connect to try again.",
+  }[code] || `Tempo couldn't reach the Find My helper (${code || "unknown"}: ${macError?.message || "no details"}).`;
+  return { warn: true, text: why, connect: true };
 }
 
 // ---------------------------------------------------------------- location relay -> pings & visits
@@ -827,6 +839,7 @@ function renderInsights() {
       <div class="muted small" style="grid-column:1/-1">${hours(pl)} h in the last 8 weeks${pl.guessed ? " · named by Claude" : ""}${pl.lat != null ? ` · <a href="https://maps.google.com/?q=${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}" target="_blank" rel="noopener">map</a>` : ""}</div></div>`).join("")
     : `<p class="muted small">No places yet. They appear after you've spent time somewhere on two different days.</p>`;
   const ls = $("#loc-status"), fm = findMyLine();
+  $("#fm-connect").hidden = !fm?.connect;
   if (fm) { ls.className = fm.warn ? "status" : "status ok"; ls.textContent = fm.text; $("#open-guide").textContent = "Other ways to share location"; }
   else if (!relayCal) { ls.className = "status"; ls.textContent = "Not set up. Start with step 1 of the guide."; }
   else if (!model.pings) { ls.className = "status"; ls.textContent = "Found your “Tempo location” calendar. Waiting for your phone's first update."; }
@@ -857,6 +870,10 @@ async function refresh(force) {
   }
 }
 $("#refresh").addEventListener("click", (e) => busy(e.currentTarget, "Refreshing", () => refresh(true)));
+$("#fm-connect").addEventListener("click", (e) => busy(e.currentTarget, "Connecting", async () => {
+  await loadFindMy(); render();
+  toast(macReachable ? "Connected to the Find My helper" : "Still can't reach the helper. See the message above.", 4000);
+}));
 $("#check-loc").addEventListener("click", (e) => busy(e.currentTarget, "Checking", async () => { await refresh(true); toast(model.pings ? `Last update ${ago(model.lastPing)}` : "No location updates found yet"); }));
 
 document.addEventListener("click", async (ev) => {
