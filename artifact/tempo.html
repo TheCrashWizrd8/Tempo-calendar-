@@ -308,6 +308,8 @@ details.card summary { cursor: pointer; font-weight: 500; }
       <div class="row"><span class="small muted">This week is</span>
         <div class="seg" role="group" aria-label="Current fortnight week"><button type="button" data-wk="A" aria-pressed="false">Week A</button><button type="button" data-wk="B" aria-pressed="false">Week B</button></div></div>
       <div id="terms" class="stack"></div>
+      <div class="row"><button class="btn small" id="term-fit" type="button">Fit my classes to term dates</button></div>
+      <p class="small muted" id="fit-status">Your repeating classes in Google Calendar keep going through the holidays until you do this. Each class becomes one series per term; past classes stay as they are.</p>
       <div class="row"><button class="btn small" id="term-add" type="button">Add term</button><button class="btn small primary" id="term-save" type="button">Save terms</button></div>
     </div>
 
@@ -448,7 +450,8 @@ async function flush() {
   if (clearOld) { clearOld = false; await rootRef.set({ moved: Date.now() }).catch(() => {}); } // old one-block format, now copied over
 }
 let renderSoon = null;
-const rerender = () => { clearTimeout(renderSoon); renderSoon = setTimeout(() => { if (loadedAt) { render(); termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms(); } }, 250); };
+let termDirty = false, settingsDirty = false, placesDirty = false; // forms you're editing aren't redrawn under you
+const rerender = () => { clearTimeout(renderSoon); renderSoon = setTimeout(() => { if (loadedAt) { render(); if (!termDirty) { termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms(); } } }, 250); };
 function applyState(snap) {
   let changed = false;
   for (const d of snap.docs) {
@@ -560,7 +563,7 @@ function toEvent(e, cal) {
   const end = allDay ? new Date((e.end?.date || e.start.date) + "T00:00:00").getTime() : Date.parse(e.end?.dateTime || e.start.dateTime);
   if (!Number.isFinite(start)) return null;
   return { id: e.id, start, end: Math.max(end, start), allDay, title: e.summary || "(no title)", location: e.location || "", desc: e.description || "",
-    cal: cal.summary, calId: cal.id, free: e.transparency === "transparent",
+    cal: cal.summary, calId: cal.id, free: e.transparency === "transparent", transp: e.transparency === "transparent",
     color: e.colorId || "", recurringId: e.recurringEventId || "", key: `${cal.id}|${e.id}` };
 }
 
@@ -946,7 +949,13 @@ function renderCheckinTimes() {
 }
 
 // ---------------------------------------------------------------- rendering
+/** With term dates saved, a class on a day outside every term is a holiday: hidden and never counted as busy. */
+function markHolidays() {
+  const has = (S.settings.terms || []).length > 0;
+  for (const e of events) { e.holiday = has && !e.allDay && catOf(e) === "class" && !termFor(lp(e.start).key); e.free = !!e.transp || e.holiday; }
+}
 function render() {
+  markHolidays();
   buildModel();
   renderAgenda(); renderStudy(); renderInsights(); paintWeek(); renderCheckinTimes(); renderClashes(); renderReview(); paintAuto();
 }
@@ -963,7 +972,7 @@ function suggestCard(p, withDate) {
 }
 function renderAgenda() {
   const now = Date.now(), today = lp(now).key;
-  const items = [...events.filter((e) => e.end > now - HOUR && e.start < now + 14 * DAY).map((e) => ({ k: "e", t: e.start, e })),
+  const items = [...events.filter((e) => e.end > now - HOUR && e.start < now + 14 * DAY && !e.holiday).map((e) => ({ k: "e", t: e.start, e })),
     ...S.proposals.filter((p) => p.status === "proposed" && p.end > now).map((p) => ({ k: "p", t: p.start, p }))].sort((a, b) => a.t - b.t);
   const checks = S.proposals.filter((p) => p.status === "accepted" && p.end <= now);
   $("#checkins").innerHTML = checks.map((p) => `<div class="card notice" data-pid="${p.id}"><b>Did you study ${esc(p.subject.replace(/^📚 Study:\s*/, ""))}?</b>
@@ -977,7 +986,8 @@ function renderAgenda() {
     if (k !== cur) {
       cur = k; prev = null;
       const rel = k === today ? "Today" : k === lp(now + DAY).key ? "Tomorrow" : "", wk = (S.settings.terms || []).length && !termFor(k) ? null : weekOf(k);
-      html += `<div class="day">${esc(fDay(it.t))}${rel ? `<span class="rel">${rel}</span>` : ""}${wk ? `<span class="rel">Week ${wk}</span>` : ""}</div>`;
+      const hol = (S.settings.terms || []).length && !termFor(k) && lp(it.t).dow < 5;
+      html += `<div class="day">${esc(fDay(it.t))}${rel ? `<span class="rel">${rel}</span>` : ""}${wk ? `<span class="rel">Week ${wk}</span>` : ""}${hol ? `<span class="rel">Holidays</span>` : ""}</div>`;
     }
     if (it.k === "e") { html += driveRow(prev, it.e) + evCard(it.e); if (!it.e.allDay) prev = it.e; }
     else html += suggestCard(it.p, false);
@@ -1002,7 +1012,7 @@ function renderInsights() {
   heat("#heat-study", model.study.map((r, d) => r.map((v, h) => v + 0.3 * Math.tanh(model.pref[d][h]))), "--study");
   heat("#heat-busy", model.busy, "--busy");
   const hours = (pl) => (model.visits.filter((v) => v.place.id === pl.id).reduce((s, v) => s + v.end - v.start, 0) / HOUR).toFixed(1);
-  $("#places").innerHTML = S.places.length ? S.places.map((pl) => `<div class="card place" data-place="${pl.id}">
+  if (!placesDirty) $("#places").innerHTML = S.places.length ? S.places.map((pl) => `<div class="card place" data-place="${pl.id}">
       <input class="input" id="pn-${pl.id}" value="${esc(pl.name)}" placeholder="Name this place" aria-label="Place name">
       <select class="input" id="pk-${pl.id}" aria-label="Place type">${KINDS.map((k) => `<option ${k === pl.kind ? "selected" : ""}>${k}</option>`).join("")}</select>
       <div class="row"><button class="btn small" data-pact="save">Save</button><button class="btn small ghost" data-pact="del" aria-label="Forget place">Forget</button></div>
@@ -1016,6 +1026,7 @@ function renderInsights() {
   else if (!model.pings) { ls.className = "status"; ls.textContent = "Found your “Tempo location” calendar. Waiting for your phone's first update."; }
   else { ls.className = "status ok"; ls.textContent = `Location learning is on. Last update ${ago(model.lastPing)}, ${model.pings} in the last 8 weeks.`; }
   const st = S.settings;
+  if (!settingsDirty) {
   $("#s-len").value = st.sessionMinutes; $("#s-max").value = st.maxPerDay; $("#s-early").value = st.earliestHour; $("#s-late").value = st.latestHour;
   $("#s-buf").value = st.bufferMinutes; $("#s-subjects").value = st.subjects.join(", ");
   $("#s-place").value = st.studyPlace || ""; $("#s-place").placeholder = studyPlace();
@@ -1023,6 +1034,7 @@ function renderInsights() {
   const writable = cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
   $("#s-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === st.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
   $("#s-cals").innerHTML = cals.filter((c) => c !== relayCal).map((c, i) => `<label class="row small" style="gap:6px;color:var(--ink)"><input type="checkbox" id="lc-${i}" value="${esc(c.id)}" ${st.learnCals.includes(c.id) ? "checked" : ""}>${esc(c.summary)}</label>`).join("");
+  }
 }
 
 // ---------------------------------------------------------------- actions
@@ -1121,6 +1133,7 @@ $("#places").addEventListener("click", (e) => {
   const b = e.target.closest("[data-pact]"); if (!b) return;
   const id = b.closest("[data-place]").dataset.place, pl = S.places.find((x) => x.id === id); if (!pl) return;
   if (b.dataset.pact === "del" && b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to forget"; return; }
+  placesDirty = false;
   const before = snapshotS();
   if (b.dataset.pact === "save") { pl.name = $(`#pn-${id}`).value.trim(); const k = $(`#pk-${id}`).value, w = $(`#pw-${id}`).checked;
     if (k !== pl.kind) pl.kindSet = true; pl.kind = k;
@@ -1133,6 +1146,7 @@ $("#places").addEventListener("click", (e) => {
 
 $("#settings").addEventListener("submit", (e) => {
   e.preventDefault();
+  settingsDirty = false;
   const before = snapshotS();
   const st = S.settings, num = (sel, d) => { const v = Number($(sel).value); return Number.isFinite(v) && $(sel).value !== "" ? v : d; };
   st.sessionMinutes = num("#s-len", 60); st.maxPerDay = num("#s-max", 2); st.earliestHour = num("#s-early", 8); st.latestHour = num("#s-late", 22); st.bufferMinutes = num("#s-buf", 15);
@@ -1633,7 +1647,7 @@ function findClashes() {
   const exams = events.filter((e) => isExamDay(e) && e.end > now && e.start < until + DAY);
   for (const w of shifts) {
     for (const e of events) {
-      if (e === w || e.allDay || e.end <= now || !(e.start < w.end && e.end > w.start)) continue;
+      if (e === w || e.allDay || e.holiday || e.end <= now || !(e.start < w.end && e.end > w.start)) continue;
       const c = catOf(e);
       if (c === "class") add(w, e, `overlaps ${e.title}`);
       else if (c === "exam_or_deadline") add(w, e, `overlaps ${e.title}`);
@@ -1772,7 +1786,7 @@ function usualEvents() {
 }
 function upcomingItems() {
   const now = Date.now(), until = now + 14 * DAY;
-  const evs = events.filter((e) => e.end > now && e.start < until && !/^Tempo check-in/.test(e.title))
+  const evs = events.filter((e) => e.end > now && e.start < until && !e.holiday && !/^Tempo check-in/.test(e.title))
     .map((e) => ({ id: e.key, kind: "event", ev: e, start: e.start, end: e.end, allDay: e.allDay, title: e.title, location: e.location, movable: !e.allDay && isMovable(e) }));
   const props = S.proposals.filter((p) => p.status === "proposed" && p.end > now)
     .map((p) => ({ id: "p|" + p.id, kind: "proposal", p, start: p.start, end: p.end, allDay: false, title: `📚 Study: ${p.subject} (suggested)`, location: "", movable: true }));
@@ -2182,9 +2196,12 @@ function renderTerms() {
 }
 function readTerms() { termDraft = termDraft.map((t, i) => ({ name: $(`#tn-${i}`).value.trim() || `Term ${i + 1}`, start: $(`#ts-${i}`).value, end: $(`#te-${i}`).value, firstWeek: $(`#tw-${i}`).value })); }
 $("#term-add").addEventListener("click", () => {
-  readTerms(); const last = termDraft[termDraft.length - 1];
+  readTerms(); termDirty = true; const last = termDraft[termDraft.length - 1];
   termDraft.push({ name: `Term ${termDraft.length + 1}`, start: last?.end ? addDays(last.end, 15) : "", end: "", firstWeek: "" }); renderTerms();
 });
+$("#terms").addEventListener("input", () => { termDirty = true; });
+$("#settings").addEventListener("input", () => { settingsDirty = true; });
+$("#places").addEventListener("input", () => { placesDirty = true; });
 $("#terms").addEventListener("click", (e) => { const b = e.target.closest("[data-term-del]"); if (!b) return; readTerms(); termDraft.splice(+b.dataset.termDel, 1); renderTerms(); });
 $("#term-save").addEventListener("click", () => {
   readTerms();
@@ -2193,8 +2210,90 @@ $("#term-save").addEventListener("click", () => {
   const before = snapshotS();
   for (const t of termDraft) if (!t.firstWeek) t.firstWeek = anchorWeek(t.start) || "A"; // "Match this week" follows the A/B switch
   S.settings.terms = termDraft.slice().sort((a, b) => a.start.localeCompare(b.start));
-  termDraft = S.settings.terms.map((t) => ({ ...t })); save(); renderTerms(); render();
+  termDirty = false; termDraft = S.settings.terms.map((t) => ({ ...t })); save(); renderTerms(); render();
   pushUndo("Term dates saved", async () => { restoreS(before); termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms(); });
+});
+
+
+// ---------------------------------------------------------------- fit repeating classes to term dates (in Google Calendar)
+let fitPlan = null;
+async function planFit() {
+  const all = (S.settings.terms || []).filter((t) => t.start && t.end).sort((a, b) => a.start.localeCompare(b.start)), today = dOf(Date.now());
+  const writable = new Set(writableCals().map((c) => c.id)), seen = new Map();
+  for (const e of events) if (e.recurringId && catOf(e) === "class" && writable.has(e.calId) && !seen.has(e.calId + "|" + e.recurringId)) seen.set(e.calId + "|" + e.recurringId, e);
+  const work = [];
+  for (const e of seen.values()) {
+    let m = await gcal("get_event", { calendarId: e.calId, eventId: e.recurringId }).catch(() => null); m = m?.event || m;
+    const rr = (m?.recurrence || []).find((r) => /^RRULE:/i.test(r));
+    if (!rr || !/FREQ=WEEKLY/i.test(rr) || !m.start?.dateTime || /COUNT=/i.test(rr)) continue;
+    const mStart = Date.parse(m.start.dateTime), dur = Date.parse(m.end.dateTime) - mStart, mDate = dOf(mStart), time = tOf(mStart);
+    const um = rr.match(/UNTIL=(\d{4})(\d{2})(\d{2})/), until = um ? `${um[1]}-${um[2]}-${um[3]}` : null;
+    const days = ((rr.match(/BYDAY=([^;]+)/i) || [])[1] || "").split(",").map((x) => x.replace(/^[+-]?\d+/, "").toUpperCase()).filter((x) => DAY_CODES.includes(x));
+    const interval = +((rr.match(/INTERVAL=(\d+)/i) || [])[1] || 1);
+    const base = rr.replace(/;(UNTIL|COUNT)=[^;]*/gi, "") + (interval > 1 && !/WKST=/i.test(rr) ? ";WKST=MO" : "");
+    // already fitted: ends on the last day of the term it starts in
+    const own = all.find((t) => mDate >= t.start && mDate <= t.end);
+    if (own && until && until <= own.end) continue;
+    const prevTerm = [...all].reverse().find((t) => t.start <= today);
+    const pieces = [];
+    const firstEnd = prevTerm && mDate <= prevTerm.end ? prevTerm.end : null;
+    if (firstEnd) pieces.push({ start: localISO(mStart), end: localISO(mStart + dur), until: until && until < firstEnd ? until : firstEnd });
+    for (const t of all) {
+      if (t.end < today || (firstEnd && t.start <= firstEnd) || (until && t.start > until)) continue;
+      const wd = days.length ? days : [DAY_CODES[new Date(mDate + "T12:00").getDay()]];
+      let d = t.start > mDate ? t.start : mDate, found = null;
+      for (let i = 0; i < 21 && d <= t.end; i++, d = addDays(d, 1))
+        if (wd.includes(DAY_CODES[new Date(d + "T12:00").getDay()]) && weeksBetween(mondayOf(mDate), mondayOf(d)) % interval === 0) { found = d; break; }
+      if (!found) continue;
+      const st = new Date(`${found}T${time}`).getTime();
+      pieces.push({ start: localISO(st), end: localISO(st + dur), until: until && until < t.end ? until : t.end });
+    }
+    if (pieces.length) work.push({ e, m, base, pieces });
+  }
+  return work;
+}
+$("#term-fit").addEventListener("click", (ev) => {
+  const btn = ev.currentTarget;
+  if (!(S.settings.terms || []).length) return toast("Save your term dates first.");
+  if (!fitPlan) {
+    return busy(btn, "Checking", async () => {
+      try {
+        fitPlan = await planFit();
+        $("#fit-status").textContent = fitPlan.length
+          ? `${fitPlan.length} repeating class${fitPlan.length === 1 ? "" : "es"} run into the holidays: ${[...new Set(fitPlan.map((w) => w.m.summary))].slice(0, 8).join(", ")}. Tap again to fit them to your terms.`
+          : "Your classes already fit your term dates.";
+        if (!fitPlan.length) fitPlan = null;
+      } catch (e) { $("#fit-status").textContent = connectorError(e); fitPlan = null; }
+    }).then(() => { if (fitPlan) btn.textContent = `Fit ${fitPlan.length} class${fitPlan.length === 1 ? "" : "es"} to term dates`; });
+  }
+  busy(btn, "Fitting", async () => {
+    const done = [];
+    for (const [i, w] of fitPlan.entries()) {
+      $("#fit-status").textContent = `Fitting ${i + 1} of ${fitPlan.length}…`;
+      try {
+        const made = [];
+        for (const p of w.pieces) {
+          const r = await gcal("create_event", { calendarId: w.e.calId, summary: w.m.summary || w.e.title, startTime: p.start, endTime: p.end,
+            location: w.m.location || undefined, description: w.m.description || undefined, colorId: w.m.colorId || undefined,
+            recurrenceData: [`${w.base};UNTIL=${utcStamp(new Date(`${p.until}T23:59:59`).getTime())}`] });
+          made.push({ id: idOf(r), title: w.m.summary || w.e.title, start: new Date(p.start).getTime() });
+        }
+        try { await gcal("delete_event", { calendarId: w.e.calId, eventId: w.e.recurringId, notificationLevel: "NONE" }); }
+        catch (err) { for (const c of made) await deleteCreated(w.e.calId, c.id, c.title, c.start, true).catch(() => {}); throw err; }
+        done.push({ w, made });
+      } catch (err) { if (err?.code && err.code !== "tool_error") { toast(connectorError(err), 6000); break; } }
+    }
+    $("#fit-status").textContent = `Fitted ${done.length} class${done.length === 1 ? "" : "es"} to your term dates. The holidays are clear in Google Calendar now.`;
+    fitPlan = null; btn.textContent = "Fit my classes to term dates";
+    if (done.length) pushUndo(`Fitted ${done.length} classes to term dates`, async () => {
+      for (const d of done) {
+        await gcal("create_event", seriesInput(d.w.m, { calId: d.w.e.calId, title: d.w.e.title }));
+        for (const c of d.made) await deleteCreated(d.w.e.calId, c.id, c.title, c.start, true);
+      }
+      await afterWrite();
+    });
+    await afterWrite();
+  });
 });
 
 // ---------------------------------------------------------------- screenshot import
