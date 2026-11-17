@@ -232,8 +232,10 @@ details.card summary { cursor: pointer; font-weight: 500; }
           <li><b>Test it.</b> Tap ▶ in the shortcut, wait about a minute for it to sync, then tap <b>Check now</b> above.</li>
           <li><b>Make it run by itself.</b> Shortcuts → <b>Automation</b> → <b>+</b>. For each trigger choose <b>Run Immediately</b> and the action <b>Run Shortcut → Tempo ping</b>:
             <ul>
-              <li><b>App → Is Opened</b>: choose 3 to 5 apps you use every day. This gives the most samples, spread across your day.</li>
-              <li><b>Time of Day</b> (optional): e.g. 8 AM, 1 PM, 6 PM, 10 PM.</li>
+              <li><b>Time of Day, 10 minutes after your events start.</b> iPhones can't start a shortcut when a calendar event begins, so Tempo works out the times from your calendar. Make one automation per line below: choose the time, <b>Weekly</b>, and tick the days shown.
+                <div id="checkin-times" class="stack small" style="margin-top:6px"></div>
+              </li>
+              <li><b>App → Is Opened</b> (optional, extra samples): choose a few apps you use every day.</li>
             </ul>
           </li>
         </ol>
@@ -685,10 +687,29 @@ async function namePlaces() {
   save();
 }
 
+/** Event start + 10 min, grouped into weekly times you can turn into Shortcuts automations. */
+function renderCheckinTimes() {
+  const el = $("#checkin-times"); if (!el) return;
+  const now = Date.now(), byTime = new Map();
+  for (const e of events) {
+    if (e.allDay || e.free || e.start < now || e.start > now + 14 * DAY) continue;
+    const p = lp(e.start + 10 * MIN), k = `${pad(p.hour)}:${pad(p.minute)}`;
+    if (!byTime.has(k)) byTime.set(k, { days: new Set(), titles: new Set() });
+    byTime.get(k).days.add(p.dow); byTime.get(k).titles.add(e.title);
+  }
+  const fmtDays = (ds) => ds.length === 7 ? "Every day" : ds.join(",") === "0,1,2,3,4" ? "Mon–Fri" : ds.map((d) => DAYS[d]).join(", ");
+  const rows = [...byTime.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([k, v]) => {
+    const [h, m] = k.split(":").map(Number), when = new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const t = [...v.titles]; return `<div><b>${esc(when)}</b> · ${esc(fmtDays([...v.days].sort()))} <span class="muted">(${esc(t.slice(0, 3).join(", "))}${t.length > 3 ? "…" : ""})</span></div>`;
+  });
+  el.innerHTML = rows.length ? rows.join("") + `<div class="muted">${rows.length} automation${rows.length === 1 ? "" : "s"}. Fortnightly classes are covered every week; the extra check-ins don't hurt.</div>`
+    : `<div class="muted">No timed events in the next two weeks yet.</div>`;
+}
+
 // ---------------------------------------------------------------- rendering
 function render() {
   buildModel();
-  renderAgenda(); renderStudy(); renderInsights(); paintWeek();
+  renderAgenda(); renderStudy(); renderInsights(); paintWeek(); renderCheckinTimes();
 }
 function evCard(e) {
   const c = catOf(e);
