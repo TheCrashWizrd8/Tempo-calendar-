@@ -110,6 +110,11 @@ dialog.sheet::backdrop { background: rgba(8, 18, 16, .5); }
 .ed-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: space-between; }
 .btn.danger { color: var(--bad); }
 .err { color: var(--bad); font-size: 13px; }
+.review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0; }
+.stat { background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.stat b { display: block; font: 700 20px var(--display); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); }
+.clash { border-left: 3px solid rgb(var(--busy)); }
 .plan .prow { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; }
 .plan .prow .ic { font-weight: 700; color: var(--accent); text-align: center; }
 .plan .prow.warn .ic, .plan .prow.warn { color: rgb(var(--busy)); }
@@ -151,6 +156,8 @@ details.card summary { cursor: pointer; font-weight: 500; }
       <div class="seg" role="group" aria-label="Current fortnight week"><button type="button" data-wk="A" aria-pressed="false">Week A</button><button type="button" data-wk="B" aria-pressed="false">Week B</button></div>
     </div>
     <div id="ask-plan" class="stack" style="margin-top:10px"></div>
+    <div id="clashes" class="stack" style="margin-top:10px"></div>
+    <div id="review-card" class="stack" style="margin-top:10px"></div>
     <div id="checkins" class="stack" style="margin-top:12px"></div>
     <div id="agenda"><div class="empty"><span class="spin"></span>Loading your calendars…</div></div>
   </section>
@@ -195,6 +202,9 @@ details.card summary { cursor: pointer; font-weight: 500; }
 
   <!-- INSIGHTS -->
   <section id="v-insights" hidden>
+    <h2>Your week</h2>
+    <div class="card" id="review"><p class="muted">Loading…</p></div>
+
     <h2>What Tempo has learned</h2>
     <div class="card" id="summary"><p class="muted">Loading…</p></div>
     <div class="row" style="margin-top:8px"><button class="btn" id="learn">Update learning with Claude</button><span class="muted small" id="learn-status"></span></div>
@@ -273,6 +283,14 @@ details.card summary { cursor: pointer; font-weight: 500; }
         </ol>
         <p class="small muted">IFTTT only knows places you draw yourself, and its free plan limits how many applets you can have. Shortcuts finds new places on its own. You can use both.</p>
       </div>
+    </div>
+
+    <h3>Automatic help</h3>
+    <div class="card stack">
+      <label class="row" style="gap:8px;align-items:flex-start"><input type="checkbox" id="auto-leave"><span><b>Leave-by alerts.</b> Tempo sets each event's phone reminder to your travel time plus 5 minutes, so it goes off when it's time to leave.</span></label>
+      <label class="row" style="gap:8px;align-items:flex-start"><input type="checkbox" id="auto-rev"><span><b>Revision plans.</b> Tempo books spaced study sessions before anything titled Exam, Test or Due. They're movable, so Ask Tempo can shuffle them.</span></label>
+      <label class="row" style="gap:8px;align-items:flex-start"><input type="checkbox" id="auto-clash"><span><b>Shift clash warnings.</b> Tempo warns you when a shift overlaps school, an exam or your other job, or runs late the night before an exam.</span></label>
+      <p class="small muted" id="auto-status"></p>
     </div>
 
     <h3>One calendar</h3>
@@ -378,10 +396,13 @@ let db = null, mcp = null, sample = null, uid = null, stateRef = null, myName = 
 let cals = [], relayCal = null, events = [], relay = [], loadedAt = 0;
 const LOADED = { from: 0, to: 0 };
 const S = {                 // persisted per user (private) in the artifact's db
-  settings: { sessionMinutes: 60, maxPerDay: 2, earliestHour: 8, latestHour: 22, bufferMinutes: 15, subjects: [], studyCal: "", learnCals: null, studyPlace: "", terms: [], weekAnchor: null },
+  settings: { sessionMinutes: 60, maxPerDay: 2, earliestHour: 8, latestHour: 22, bufferMinutes: 15, subjects: [], studyCal: "", learnCals: null, studyPlace: "", terms: [], weekAnchor: null, leaveBy: true, autoRevision: true, clashWarn: true },
   places: [],               // {id, name, kind, lat?, lng?, guessed}
   titleCats: {},            // event title -> category (learned by Claude)
   travel: {},               // "place a|place b" -> minutes (estimated; -1 = unknown)
+  leaveSet: {},             // event key -> reminder minutes Tempo set (leave-by alerts)
+  revision: {},             // exam/due event key -> { n, at } revision already planned
+  dismissed: {},            // clash keys / review weeks you hid
   proposals: [],            // {id, start, end, subject, reason, status, eventId}
 };
 
@@ -848,7 +869,7 @@ function renderCheckinTimes() {
 // ---------------------------------------------------------------- rendering
 function render() {
   buildModel();
-  renderAgenda(); renderStudy(); renderInsights(); paintWeek(); renderCheckinTimes();
+  renderAgenda(); renderStudy(); renderInsights(); paintWeek(); renderCheckinTimes(); renderClashes(); renderReview(); paintAuto();
 }
 function evCard(e) {
   const c = catOf(e), flex = isMovable(e);
@@ -935,6 +956,7 @@ async function refresh(force) {
     await loadCalendars(force); await loadData(force); await loadFindMy();
     banner(""); render(); renderMoveCals(); paintCheckins();
     if (S.settings.checkins) syncCheckins();
+    runAutomatic();
   } catch (e) {
     banner(mcpMessage(e));
     if (!events.length) $("#agenda").innerHTML = `<div class="empty">Your calendar will show here once Google Calendar is connected.</div>`;
@@ -1078,7 +1100,7 @@ async function undoLast() {
   catch (e) { toast(e?.code ? `Couldn't undo: ${connectorError(e)}` : `Couldn't undo. ${e?.message || ""}`, 6000); }
   finally { undoing = false; }
 }
-const snapshotS = () => JSON.stringify({ settings: S.settings, places: S.places, proposals: S.proposals, titleCats: S.titleCats, travel: S.travel });
+const snapshotS = () => JSON.stringify({ settings: S.settings, places: S.places, proposals: S.proposals, titleCats: S.titleCats, travel: S.travel, leaveSet: S.leaveSet, revision: S.revision, dismissed: S.dismissed });
 function restoreS(json) { Object.assign(S, JSON.parse(json)); save(); render(); }
 const idOf = (r) => r?.id ?? r?.event?.id ?? r?.eventId ?? null;
 function recreateInput(ev) {
@@ -1147,6 +1169,8 @@ function pendingPairs() {
   const add = (a, b) => { if (!a || !b || norm(a) === norm(b)) return; const k = pairKey(a, b); if (travelMin(a, b) == null && S.travel[k] == null) out.set(k, [a, b]); };
   for (let i = 1; i < soon.length; i++) { const a = soon[i - 1], b = soon[i]; if (lp(a.start).key === lp(b.start).key && b.start - a.end < 4 * HOUR) add(a.location, b.location); }
   const sp = studyPlace(); for (const e of soon) add(sp, e.location);
+  const firstOfDay = new Map(); for (const e of soon) if (!firstOfDay.has(lp(e.start).key)) firstOfDay.set(lp(e.start).key, e);
+  for (const e of firstOfDay.values()) add(homeLabel(), e.location);
   return [...out.values()];
 }
 async function estimateTravel() {
@@ -1438,7 +1462,7 @@ $("#ed-form").addEventListener("submit", (e) => {
 });
 $("#agenda").addEventListener("click", (e) => {
   const est = e.target.closest("#est-drive");
-  if (est) { busy(est, "", async () => { try { const n = await estimateTravel(); render(); toast(n ? "Drive times updated" : "Nothing to estimate"); } catch (err) { toast(sampleMessage(err), 5000); } }); return; }
+  if (est) { busy(est, "", async () => { try { const n = await estimateTravel(); render(); runAutomatic(); toast(n ? "Drive times updated" : "Nothing to estimate"); } catch (err) { toast(sampleMessage(err), 5000); } }); return; }
   const card = e.target.closest(".ev[data-key]"); if (!card) return;
   const ev = events.find((x) => x.key === card.dataset.key); if (ev && !ev.key.startsWith("pending|")) openEditor(ev);
 });
@@ -1449,6 +1473,202 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z" && !e.target.closest("input, textarea, select")) { e.preventDefault(); undoLast(); }
 });
 $("#new-ev").addEventListener("click", () => { if (!mcp) return toast("Connect Google Calendar first."); openEditor(null); });
+
+
+// ---------------------------------------------------------------- automatic help: leave-by alerts, revision plans, clash warnings
+const homeLabel = () => S.places.find((p) => p.kind === "home" && p.name)?.name || "Home";
+const examLike = (e) => catOf(e) === "exam_or_deadline" || /^(exam|test|due|quiz|assessment|assignment)\b/i.test(e.title);
+const isExamDay = (e) => examLike(e) && /exam|test|quiz/i.test(e.title);
+const subjectOf = (t) => t.replace(/^(exam|test|due|quiz|assessment|assignment)\s*[:\-–]?\s*/i, "").replace(/\s*\(time TBC\)$/, "").trim() || t;
+let autoRunning = false, autoAgain = false, autoInfo = { leave: 0, rev: 0 };
+async function runAutomatic() {
+  if (!mcp || !model) return;
+  if (autoRunning) { autoAgain = true; return; } // e.g. drive times arrived mid-run: go again afterwards
+  autoRunning = true; autoAgain = false;
+  try {
+    if (S.settings.leaveBy) autoInfo.leave = await syncLeaveBy();
+    if (S.settings.autoRevision) { const n = await syncRevision(); autoInfo.rev += n; if (n) { autoRunning = false; await afterWrite(); } }
+  } catch { /* try again next time Tempo opens */ }
+  finally { autoRunning = false; paintAuto(); if (autoAgain) { autoAgain = false; runAutomatic(); } }
+}
+/** Phone reminder = travel from where you'll be (the previous event that day, else home) + 5 min. */
+async function syncLeaveBy() {
+  const now = Date.now(), writable = new Set(writableCals().map((c) => c.id)); let ops = 0, set = 0;
+  const soon = events.filter((e) => !e.allDay && !e.free && e.location && e.start > now + 20 * MIN && e.start < now + 7 * DAY && !/^Tempo check-in/.test(e.title)).sort((a, b) => a.start - b.start);
+  for (const e of soon) {
+    if (!writable.has(e.calId)) continue;
+    const day = lp(e.start).key;
+    const prev = events.filter((x) => !x.allDay && x.location && x !== e && x.end <= e.start && lp(x.start).key === day && e.start - x.end < 4 * HOUR).sort((a, b) => b.end - a.end)[0];
+    const t = travelMin(prev ? prev.location : homeLabel(), e.location);
+    if (t == null || t <= 5) continue;
+    const lead = Math.ceil((t + 5) / 5) * 5; set++;
+    if (S.leaveSet[e.key] === lead) continue;
+    if (ops++ >= 25) break;
+    await gcal("update_event", { calendarId: e.calId, eventId: e.id, overrideReminders: [{ method: "popup", minutes: lead }], notificationLevel: "NONE" });
+    S.leaveSet[e.key] = lead;
+  }
+  for (const k of Object.keys(S.leaveSet)) if (!events.some((e) => e.key === k && e.end > now - DAY)) delete S.leaveSet[k];
+  save(); return set;
+}
+async function clearLeaveBy() {
+  for (const k of Object.keys(S.leaveSet)) {
+    const e = events.find((x) => x.key === k && x.end > Date.now()); if (!e) continue;
+    await gcal("update_event", { calendarId: e.calId, eventId: e.id, useDefaultReminders: true, notificationLevel: "NONE" }).catch(() => {});
+  }
+  S.leaveSet = {}; save();
+}
+/** Spaced, movable study sessions before each exam / test / due date in the next four weeks (planned once each). */
+async function syncRevision() {
+  const now = Date.now(), items = upcomingItems(), created = [], cal = targetCal();
+  const targets = events.filter((e) => examLike(e) && !isTempoStudy(e) && e.start > now + 36 * HOUR && e.start < now + 28 * DAY && !S.revision[e.key]).slice(0, 3);
+  for (const ex of targets) {
+    const exam = isExamDay(ex), offsets = (exam ? [10, 6, 3, 1] : [7, 4, 2]).filter((d) => ex.start - d * DAY > now + HOUR);
+    const subj = subjectOf(ex.title), dur = S.settings.sessionMinutes * MIN, placed = [];
+    for (const d of offsets) {
+      const center = (ex.allDay ? ex.start + 16 * HOUR : ex.start) - d * DAY; // all-day exams: aim for after school
+      const slot = findSlots({ dur, from: center - 18 * HOUR, to: Math.min(center + 18 * HOUR, ex.start - 2 * HOUR), near: center, limit: 1,
+        busy: busyFor(items, new Set(), created.concat(placed).map((c) => [c.start, c.end])) })[0];
+      if (slot) placed.push(slot);
+    }
+    for (const sl of placed) {
+      const title = `📚 Study: ${subj} (${exam ? "revision" : "work on it"})`;
+      const r = await gcal("create_event", { calendarId: cal.id, summary: title, startTime: localISO(sl.start), endTime: localISO(sl.end),
+        description: `Planned by Tempo for ${ex.title} on ${fShort(ex.start)}.`, colorId: "2" });
+      created.push({ id: idOf(r), title, start: sl.start, end: sl.end });
+    }
+    S.revision[ex.key] = { n: placed.length, at: now };
+  }
+  save();
+  if (created.length) pushUndo(`Planned ${created.length} revision session${created.length === 1 ? "" : "s"} before ${targets.map((t) => subjectOf(t.title)).join(", ")}`, async () => {
+    for (const c of created) await deleteCreated(cal.id, c.id, c.title, c.start, true);
+    await afterWrite();
+  });
+  return created.length;
+}
+/** Shifts that overlap school, an exam or the other job, fall on an exam day, or run late the night before one. */
+function findClashes() {
+  if (!S.settings.clashWarn) return [];
+  const now = Date.now(), until = now + 21 * DAY, out = [], seen = new Set();
+  const add = (w, e, why) => { const key = `${w.key}|${e.key}|${why}`; if (seen.has(key) || S.dismissed[key]) return; seen.add(key); out.push({ key, w, e, why }); };
+  const shifts = events.filter((e) => !e.allDay && catOf(e) === "work" && e.end > now && e.start < until);
+  const exams = events.filter((e) => isExamDay(e) && e.end > now && e.start < until + DAY);
+  for (const w of shifts) {
+    for (const e of events) {
+      if (e === w || e.allDay || e.end <= now || !(e.start < w.end && e.end > w.start)) continue;
+      const c = catOf(e);
+      if (c === "class") add(w, e, `overlaps ${e.title}`);
+      else if (c === "exam_or_deadline") add(w, e, `overlaps ${e.title}`);
+      else if (c === "work" && norm(e.title) !== norm(w.title)) add(w, e, `overlaps your other shift, ${e.title}`);
+    }
+    const wd = lp(w.start).key;
+    for (const x of exams) {
+      const xd = lp(x.start).key;
+      if (xd === wd && !(x.start < w.end && x.end > w.start)) add(w, x, `is on the same day as ${x.title}`);
+      else if (addDays(wd, 1) === xd && lp(w.end).hour >= 21) add(w, x, `finishes late the night before ${x.title}`);
+    }
+  }
+  return out.sort((a, b) => a.w.start - b.w.start);
+}
+function groupedClashes() {
+  const by = new Map();
+  for (const c of findClashes()) { if (!by.has(c.w.key)) by.set(c.w.key, { w: c.w, items: [] }); by.get(c.w.key).items.push(c); }
+  return [...by.values()];
+}
+function renderClashes() {
+  const join = (xs) => xs.length > 1 ? `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}` : xs[0];
+  $("#clashes").innerHTML = groupedClashes().slice(0, 5).map((g) => {
+    const over = g.items.filter((c) => c.why.startsWith("overlaps ") && !c.why.includes("other shift")).map((c) => c.e.title);
+    const other = g.items.filter((c) => !(c.why.startsWith("overlaps ") && !c.why.includes("other shift"))).map((c) => c.why);
+    const why = [over.length && `overlaps ${join(over)}`, ...other].filter(Boolean).join("; it also ");
+    return `<div class="card clash" data-clash="${esc(g.w.key)}"><b>${esc(g.w.title)}</b> <span class="muted">${esc(fmtRange(g.w.start, g.w.end))}</span>
+      <div class="small">This shift ${esc(why)}.</div>
+      <div class="row" style="margin-top:8px"><button class="btn small" data-clash-open>Open shift</button><button class="btn small ghost" data-clash-hide>Hide</button></div></div>`;
+  }).join("");
+}
+$("#clashes").addEventListener("click", (e) => {
+  const card = e.target.closest("[data-clash]"); if (!card) return;
+  const g = groupedClashes().find((x) => x.w.key === card.dataset.clash); if (!g) return;
+  if (e.target.closest("[data-clash-open]")) openEditor(g.w);
+  if (e.target.closest("[data-clash-hide]")) {
+    for (const c of g.items) S.dismissed[c.key] = Date.now(); save(); renderClashes();
+    pushUndo("Warning hidden", async () => { for (const c of g.items) delete S.dismissed[c.key]; save(); renderClashes(); });
+  }
+});
+function paintAuto() {
+  const st = S.settings; if (!$("#auto-leave")) return;
+  $("#auto-leave").checked = !!st.leaveBy; $("#auto-rev").checked = !!st.autoRevision; $("#auto-clash").checked = !!st.clashWarn;
+  const n = Object.keys(S.leaveSet).length, r = Object.values(S.revision).reduce((a, x) => a + (x.n || 0), 0);
+  $("#auto-status").textContent = [st.leaveBy && `${n} leave-by alert${n === 1 ? "" : "s"} set for the next week${n ? "" : " (they need known drive times)"}`, st.autoRevision && `${r} revision session${r === 1 ? "" : "s"} planned so far`].filter(Boolean).join(" · ");
+}
+document.addEventListener("change", async (e) => {
+  const map = { "auto-leave": "leaveBy", "auto-rev": "autoRevision", "auto-clash": "clashWarn" }, k = map[e.target.id]; if (!k) return;
+  const on = e.target.checked; S.settings[k] = on; save();
+  if (k === "leaveBy" && !on) await clearLeaveBy();
+  render(); if (on) runAutomatic();
+  pushUndo(`${{ leaveBy: "Leave-by alerts", autoRevision: "Revision plans", clashWarn: "Clash warnings" }[k]} turned ${on ? "on" : "off"}`, async () => {
+    S.settings[k] = !on; save(); if (k === "leaveBy" && on) await clearLeaveBy(); render(); if (!on) runAutomatic();
+  });
+});
+
+// ---------------------------------------------------------------- availability for a boss
+function availabilityText({ from, to, forWho, minH = 2 }) {
+  const end = Math.min(to, LOADED.to || to), st = S.settings, lines = [];
+  const busy = events.filter((e) => !e.allDay && !e.free && !isMovable(e) && e.end > from && e.start < end)
+    .map((e) => { const t = e.location ? travelMin(homeLabel(), e.location) || 0 : 0; return [e.start - t * MIN, e.end + t * MIN]; }).sort((a, b) => a[0] - b[0]);
+  for (let d = dOf(Math.max(from, Date.now())); new Date(d + "T00:00").getTime() <= end; d = addDays(d, 1)) {
+    const ws = new Date(`${d}T${pad(st.earliestHour)}:00`).getTime(), we = new Date(d + "T00:00").getTime() + st.latestHour * HOUR;
+    let cur = Math.max(ws, Date.now()); const free = [];
+    for (const [a, b] of busy) { if (b <= cur || a >= we) continue; if (a - cur >= minH * HOUR) free.push([cur, a]); cur = Math.max(cur, b); }
+    if (we - cur >= minH * HOUR) free.push([cur, we]);
+    const round = (t, up) => (up ? Math.ceil : Math.floor)(t / (15 * MIN)) * 15 * MIN; // start later, finish earlier: never overlap
+    const label = new Date(d + "T12:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+    const exam = events.some((e) => isExamDay(e) && lp(e.start).key === d);
+    lines.push(`• ${label}: ${free.length ? free.map(([a, b]) => `${fTime(round(a, true))}–${fTime(round(b, false))}`).join(", ") : "not available"}${exam && free.length ? " (exam that day, so I'd rather not)" : ""}`);
+  }
+  const range = `${new Date(Math.max(from, Date.now())).toLocaleDateString([], { day: "numeric", month: "short" })} to ${new Date(end).toLocaleDateString([], { day: "numeric", month: "short" })}`;
+  return `Hi${forWho ? ` ${forWho}` : ""}, here's when I can work from ${range}:\n${lines.join("\n")}${end < to ? "\n(I can send later dates closer to the time.)" : ""}\nThanks!`;
+}
+
+// ---------------------------------------------------------------- weekly review
+function weekNumbers(from, to) {
+  const inRange = events.filter((e) => !e.allDay && e.start >= from && e.start < to);
+  const hours = (list) => list.reduce((s, e) => s + (e.end - e.start) / HOUR, 0);
+  const work = {}; for (const e of inRange.filter((e) => catOf(e) === "work")) { const k = e.title.replace(/^shift:\s*/i, "").replace(/\s*\(time TBC\)$/, ""); work[k] = (work[k] || 0) + (e.end - e.start) / HOUR; }
+  const sessions = S.proposals.filter((p) => p.start >= from && p.start < to && p.status !== "proposed");
+  return { classH: hours(inRange.filter((e) => catOf(e) === "class")), workH: Object.values(work).reduce((a, b) => a + b, 0), work,
+    studyH: hours(inRange.filter((e) => catOf(e) === "study" || isTempoStudy(e))), done: sessions.filter((p) => p.status === "completed").length,
+    skipped: sessions.filter((p) => p.status === "skipped" || p.status === "rejected").length, sessions };
+}
+function reviewHtml(compact) {
+  const now = Date.now(), last = weekNumbers(now - 7 * DAY, now), next = weekNumbers(now, now + 7 * DAY);
+  const f = (h) => (Math.round(h * 2) / 2).toString().replace(/\.0$/, "");
+  const late = last.sessions.filter((p) => (p.status === "skipped" || p.status === "rejected") && lp(p.start).hour >= 20).length;
+  const dues = events.filter((e) => examLike(e) && !isTempoStudy(e) && e.start > now && e.start < now + 14 * DAY).slice(0, 4);
+  const evenings = [...Array(7)].map((_, i) => dOf(now + (i + 1) * DAY)).filter((d) => !events.some((e) => !e.allDay && lp(e.start).key === d && lp(e.end).hour >= 18 && !isMovable(e))).length;
+  const notes = [];
+  if (late >= 2) notes.push(`You skipped ${late} late sessions, so Tempo is planning earlier ones.`);
+  if (last.done + last.skipped) notes.push(`You did ${last.done} of ${last.done + last.skipped} planned study sessions.`);
+  if (next.workH >= 15 && dues.length) notes.push(`Heavy work week (${f(next.workH)} h) with ${dues.map((d) => subjectOf(d.title)).join(", ")} coming up.`);
+  const jobs = Object.entries(last.work).map(([k, v]) => `${esc(k)} ${f(v)} h`).join(" · ");
+  return `<div class="review-grid">
+      <div class="stat"><b>${f(last.studyH)} h</b><span>studied, last 7 days</span></div>
+      <div class="stat"><b>${f(last.workH)} h</b><span>worked, last 7 days</span></div>
+      <div class="stat"><b>${f(next.workH)} h</b><span>work coming up, next 7 days</span></div>
+      <div class="stat"><b>${evenings}</b><span>free evenings next week</span></div></div>
+    ${jobs && !compact ? `<p class="small muted">By job: ${jobs}</p>` : ""}
+    ${dues.length ? `<p class="small">Coming up: ${dues.map((d) => `${esc(subjectOf(d.title))} (${esc(fShort(d.start))})`).join(", ")}</p>` : ""}
+    ${notes.map((n) => `<p class="small">${esc(n)}</p>`).join("")}`;
+}
+function renderReview() {
+  $("#review").innerHTML = reviewHtml(false);
+  const wk = mondayOf(dOf(Date.now())), dow = lp(Date.now()).dow;
+  $("#review-card").innerHTML = (dow === 6 || dow === 0) && !S.dismissed["review|" + wk]
+    ? `<div class="card"><div class="row" style="justify-content:space-between"><b>Your week</b><button class="btn small ghost" id="review-hide">Hide</button></div>${reviewHtml(true)}</div>` : "";
+}
+document.addEventListener("click", (e) => {
+  if (e.target.id !== "review-hide") return;
+  S.dismissed["review|" + mondayOf(dOf(Date.now()))] = Date.now(); save(); renderReview();
+});
 
 // ---------------------------------------------------------------- Ask Tempo: add, find time, rearrange
 // Claude works out what you mean; Tempo's own scheduler picks the times (free, habit-scored, travel-aware)
@@ -1539,6 +1759,8 @@ function renderPlan() {
     <div class="row" style="margin-top:6px"><button class="btn small primary" data-book="${i}">Book this</button></div></div></div>`));
   const actionable = plan.adds.length || plan.moves.length;
   el.innerHTML = `<div class="card stack plan" aria-live="polite"><div>${esc(plan.reply || "")}</div>${rows.join("")}
+    ${plan.availText ? `<textarea class="input" id="avail-text" rows="${Math.min(16, plan.availText.split("\n").length + 1)}" aria-label="Availability message">${esc(plan.availText)}</textarea>
+      <div class="row"><button class="btn primary" id="avail-copy">Copy message</button></div>` : ""}
     <div class="row">${actionable ? `<button class="btn primary" id="plan-apply">Apply</button>` : ""}<button class="btn" id="plan-cancel">${actionable ? "Cancel" : "Close"}</button></div></div>`;
 }
 $("#ask-plan").addEventListener("change", (e) => {
@@ -1550,6 +1772,11 @@ $("#ask-plan").addEventListener("change", (e) => {
 });
 $("#ask-plan").addEventListener("click", (e) => {
   if (e.target.id === "plan-cancel") { plan = null; renderPlan(); return; }
+  if (e.target.id === "avail-copy") {
+    const ta = $("#avail-text");
+    navigator.clipboard.writeText(ta.value).then(() => toast("Copied. Paste it into your message to them.")).catch(() => { ta.select(); toast("Selected. Copy it from the box."); });
+    return;
+  }
   if (e.target.id === "plan-apply") return busy(e.target, "Applying", applyPlan);
   const bk = e.target.closest("[data-book]");
   if (bk && plan?.options) {
@@ -1607,10 +1834,11 @@ $("#qa").addEventListener("submit", (e) => {
         `set tentative true. Title work as "Shift: <employer or workplace>" when it matches how their shifts are named; reuse an existing location when it clearly matches.\n` +
         `- "find": they want free time found ("find", "when can I", "fit in"). Give what it's for, the minutes needed, how many blocks, and limits.\n` +
         `- "move": they want existing movable items moved; give their ids and the window to move them into. Never list fixed items.\n` +
+        `- "availability": they want to tell someone (usually a boss) when they're free to work. Give the date range, who it's for, and the shortest block worth offering in hours.\n` +
         `Reply with only JSON, leaving out keys that don't apply:\n` +
         `{"reply":"one short friendly sentence","add":[{"title":"","start":"YYYY-MM-DDTHH:MM","end":"YYYY-MM-DDTHH:MM","all_day":false,"location":"","tentative":false,"how":"what you assumed, in a few words"}],` +
         `"find":{"title":"","minutes":60,"count":1,"from":"YYYY-MM-DD","to":"YYYY-MM-DD","earliest":"HH:MM","latest":"HH:MM","days":["MO"]},` +
-        `"move":{"ids":[""],"from":"YYYY-MM-DD","to":"YYYY-MM-DD","earliest":"HH:MM","latest":"HH:MM","days":["SA"]}}`,
+        `"move":{"ids":[""],"from":"YYYY-MM-DD","to":"YYYY-MM-DD","earliest":"HH:MM","latest":"HH:MM","days":["SA"]},"availability":{"from":"YYYY-MM-DD","to":"YYYY-MM-DD","for":"who it's for","min_hours":2}}`,
         { modelTier: "default", cache: false });
       const p = { reply: r?.reply || "", adds: [], moves: [], clashes: [], unplaced: [], options: [] };
       for (const a of Array.isArray(r?.add) ? r.add : []) {
@@ -1635,7 +1863,11 @@ $("#qa").addEventListener("submit", (e) => {
           .map((o) => ({ ...o, title }));
         if (!p.options.length) p.reply = (p.reply ? p.reply + " " : "") + "I couldn't find a free block that fits. Try a longer window or a shorter block.";
       }
-      if (!p.adds.length && !p.moves.length && !p.options.length && !p.unplaced.length) p.reply = p.reply || "I couldn't work out a change to make from that. Try saying what, when and how long.";
+      if (r?.availability) {
+        const a = r.availability;
+        p.availText = availabilityText({ from: a.from ? dateMs(a.from) : Date.now(), to: a.to ? dateMs(a.to, true) : Date.now() + 14 * DAY, forWho: a.for, minH: +a.min_hours || 2 });
+      }
+      if (!p.adds.length && !p.moves.length && !p.options.length && !p.unplaced.length && !p.availText) p.reply = p.reply || "I couldn't work out a change to make from that. Try saying what, when and how long.";
       plan = p; renderPlan(); $("#qa-text").value = "";
     } catch (err) { toast(err?.code ? sampleMessage(err) : (err?.message || "Something went wrong."), 5000); }
   });
@@ -2092,7 +2324,8 @@ function renderExtracted() {
     try {
       const snap = await Promise.race([stateRef.get(), new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), 10000))]);
       const d = snap.exists ? snap.data() : null;
-      if (d) { Object.assign(S.settings, d.settings || {}); S.places = d.places || []; S.titleCats = d.titleCats || {}; S.proposals = d.proposals || []; S.travel = d.travel || {}; S.settings.terms = S.settings.terms || []; }
+      if (d) { Object.assign(S.settings, d.settings || {}); S.places = d.places || []; S.titleCats = d.titleCats || {}; S.proposals = d.proposals || []; S.travel = d.travel || {}; S.settings.terms = S.settings.terms || [];
+        S.leaveSet = d.leaveSet || {}; S.revision = d.revision || {}; S.dismissed = d.dismissed || {}; }
     } catch { /* first visit or slow store: start fresh, saves will catch up */ }
   }
   termDraft = (S.settings.terms || []).map((t) => ({ ...t })); renderTerms();
@@ -2105,7 +2338,7 @@ function renderExtracted() {
   await refresh(false);
   const perms = await window.claude.use("permissions").catch(() => null);
   if (sample && perms && pendingPairs().length && (await perms.state("sample").catch(() => "unavailable")) === "granted") {
-    estimateTravel().then((n) => { if (n) render(); }).catch(() => {});
+    estimateTravel().then((n) => { if (n) { render(); runAutomatic(); } }).catch(() => {});
   }
   if (sample && perms && Date.now() - (S.settings.placesCheckedAt || 0) > 20 * HOUR && (await perms.state("sample").catch(() => "unavailable")) === "granted") {
     namePlaces().then((n) => { if (n) render(); }).catch(() => {});
