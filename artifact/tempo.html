@@ -215,11 +215,17 @@ details.card summary { cursor: pointer; font-weight: 500; }
       </ol>
       <div id="g-steps-shortcuts">
         <ol class="steps" start="2">
-          <li><b>Sync it to your iPhone.</b> Settings → Calendar → Accounts → your Google account → make sure <b>Calendars</b> is on. You may need to wait a minute for the new calendar to appear.</li>
+          <li><b>Put it on your iPhone.</b> Shortcuts can only use calendars your iPhone's Calendar app can see.
+            <ul>
+              <li>Add your Google account: Settings → Apps → Calendar → Calendar Accounts → Add Account → Google (on older iOS: Settings → Calendar → Accounts). Make sure <b>Calendars</b> is on.</li>
+              <li>Google doesn't send new calendars to iPhones by itself. Open <a href="https://calendar.google.com/calendar/syncselect" target="_blank" rel="noopener">calendar.google.com/calendar/syncselect</a>, tick <b>Tempo location</b> and tap Save.</li>
+              <li>In the Calendar app, tap <b>Calendars</b> at the bottom and check that “Tempo location” is listed. It can take a minute.</li>
+            </ul>
+          </li>
           <li><b>Create the shortcut.</b> Shortcuts app → <b>+</b> → name it <code>Tempo ping</code>. Add these two actions:
             <ul>
               <li><b>Get Current Location</b></li>
-              <li><b>Add New Event</b>. Calendar: <b>Tempo location</b>. Title: type <code>Tempo </code>, then tap <b>Select Variable</b> → <b>Current Location</b>, tap that bubble and choose <b>Latitude</b>. Type a comma, then add the same variable again with <b>Longitude</b>. Start and End: <b>Current Date</b>.</li>
+              <li><b>Add New Event</b> (tap Add Action and search “event”; it's under Calendar). Calendar: <b>Tempo location</b>. Title: type <code>Tempo </code>, then tap <b>Select Variable</b> → <b>Current Location</b>, tap that bubble and choose <b>Latitude</b>. Type a comma, then add the same variable again with <b>Longitude</b>. Start and End: <b>Current Date</b>.</li>
             </ul>
             The title should look like <code>Tempo [Latitude],[Longitude]</code>.
           </li>
