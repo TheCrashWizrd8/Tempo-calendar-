@@ -1,0 +1,845 @@
+<title>Tempo</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Inter:wght@400;500;600&display=swap">
+<style>
+/* Layout: one narrow column like a student planner page, tab bar pinned to the bottom edge. */
+:root {
+  --bg: #f4f6f5; --surface: #ffffff; --ink: #14201d; --muted: #5d6b67; --line: #dfe5e3;
+  --accent: #0f766e; --accent-ink: #ffffff; --accent-soft: #e2f1ef;
+  --study: 21, 128, 61; --busy: 217, 119, 6; --bad: #b42318; --good: #15803d;
+  --display: "Bricolage Grotesque", "Inter", system-ui, sans-serif;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1513; --surface: #16201d; --ink: #e7efec; --muted: #94a5a0; --line: #26332f;
+  --accent: #2dd4bf; --accent-ink: #062320; --accent-soft: #15302b; --bad: #f87171; --good: #4ade80; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1513; --surface: #16201d; --ink: #e7efec; --muted: #94a5a0; --line: #26332f;
+  --accent: #2dd4bf; --accent-ink: #062320; --accent-soft: #15302b; --bad: #f87171; --good: #4ade80; color-scheme: dark }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); }
+.wrap { max-width: 720px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 8px 104px; }
+header.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-block: 12px 10px; border-bottom: 1px solid var(--line); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.brand { font: 700 22px/1 var(--display); letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 26px; height: 26px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; color: var(--accent-ink); font-size: 14px; }
+h2 { font: 700 21px/1.2 var(--display); margin: 18px 0 4px; text-wrap: balance; }
+h3 { font: 600 12px/1.3 var(--body); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 26px 0 8px; }
+p { margin: 6px 0; } .muted { color: var(--muted); } .small { font-size: 13px; }
+.btn { font: 500 14px var(--body); border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 10px; padding: 9px 14px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); } .btn:focus-visible, .input:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.small { padding: 5px 10px; font-size: 13px; } .btn.ghost { background: none; border-color: transparent; }
+.btn:disabled { opacity: .55; cursor: default; }
+.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.input { width: 100%; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row > .grow { flex: 1 1 180px; min-width: 0; }
+.notice { border-left: 3px solid var(--accent); }
+.notice.warn { border-left-color: rgb(var(--busy)); }
+.spin { display: inline-block; width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+
+/* agenda */
+.day { font: 600 15px var(--display); margin: 20px 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.day .rel { font: 500 12px var(--body); color: var(--muted); }
+.ev { display: grid; grid-template-columns: 74px 1fr; gap: 12px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 6px; }
+.ev .t { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.35; }
+.ev .b { min-width: 0; } .ev .title { font-weight: 600; overflow-wrap: anywhere; }
+.ev .meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.ev.study { box-shadow: inset 4px 0 0 rgb(var(--study)); }
+.ev.suggest { border-style: dashed; border-color: var(--accent); background: var(--accent-soft); }
+.chip { display: inline-block; font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: 1px; }
+.chip.cal { background: var(--bg); color: var(--muted); }
+.empty { text-align: center; padding: 36px 8px; color: var(--muted); }
+
+/* import */
+.drop { display: grid; place-items: center; min-height: 140px; border: 2px dashed var(--line); border-radius: 14px; padding: 16px; text-align: center; color: var(--muted); background: var(--surface); cursor: pointer; }
+.drop.over { border-color: var(--accent); } .drop img { max-height: 300px; border-radius: 8px; }
+.xev { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+.xev .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 0; }
+.xev .wide { grid-column: span 2; }
+.xev.low { border-color: rgb(var(--busy)); }
+
+/* heatmaps */
+.heat { display: grid; grid-template-columns: 30px repeat(18, minmax(0, 1fr)); gap: 2px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.heat .c { aspect-ratio: 1; border-radius: 3px; background: var(--line); max-width: 100%; }
+.heat .h { text-align: center; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.place { display: grid; grid-template-columns: 1fr 120px auto; gap: 8px; align-items: center; }
+@media (max-width: 460px) { .place { grid-template-columns: 1fr 1fr; } .place .btn { grid-column: span 2; } }
+.settings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.settings label { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.settings .wide { grid-column: span 2; }
+@media (max-width: 420px) { .settings { grid-template-columns: 1fr; } .settings .wide { grid-column: auto; } }
+
+/* setup guide */
+.steps { padding-left: 22px; margin: 8px 0; } .steps > li { margin-bottom: 14px; } .steps ul { padding-left: 18px; }
+code { font-size: 13px; background: var(--accent-soft); color: var(--ink); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+.status { padding: 10px 12px; border-radius: 10px; font-weight: 600; font-size: 14px; background: var(--bg); color: var(--muted); }
+.status.ok { color: var(--good); background: var(--accent-soft); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface); color: var(--muted); padding: 7px 12px; font: 500 13px var(--body); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+/* tabs */
+.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; background: var(--surface); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+.tabs button { flex: 1; border: 0; background: none; color: var(--muted); font: 500 12px var(--body); padding: 9px 0 11px; display: flex; flex-direction: column; align-items: center; gap: 3px; cursor: pointer; }
+.tabs button svg { width: 22px; height: 22px; }
+.tabs button[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; z-index: 20; max-width: calc(100% - 32px); font-size: 14px; }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">◷</span>Tempo</div>
+    <button class="btn small" id="refresh">Refresh</button>
+  </header>
+
+  <div id="banner" class="card notice warn" hidden style="margin-top:12px"></div>
+
+  <!-- AGENDA -->
+  <section id="v-agenda">
+    <div id="checkins" class="stack" style="margin-top:12px"></div>
+    <div id="agenda"><div class="empty"><span class="spin"></span>Loading your calendars…</div></div>
+  </section>
+
+  <!-- IMPORT -->
+  <section id="v-import" hidden>
+    <h2>Import from a screenshot</h2>
+    <p class="muted">Timetable, syllabus, email, flyer or group chat. Claude reads it and you check everything before it's added.</p>
+    <label class="drop" id="drop" for="file">
+      <span id="drop-text">Tap to choose an image, or paste or drop one here</span>
+      <img id="preview" alt="Your screenshot" hidden>
+    </label>
+    <input type="file" id="file" accept="image/*" hidden>
+    <div class="stack" style="margin-top:10px">
+      <input class="input" id="hint" placeholder="Optional note, e.g. “Term 4 timetable, ends 12 Dec”">
+      <div class="row"><button class="btn primary" id="extract" disabled>Read events</button><span id="x-status" class="muted small"></span></div>
+    </div>
+    <div id="extracted" class="stack" style="margin-top:12px"></div>
+  </section>
+
+  <!-- STUDY -->
+  <section id="v-study" hidden>
+    <h2>Plan study time</h2>
+    <p class="muted">Tempo finds free time and ranks it by when you actually get work done.</p>
+    <div class="stack">
+      <textarea class="input" id="goals" rows="3" placeholder="What's coming up? e.g. “Physics test Friday, English essay due Monday, 30 min of maths each day”"></textarea>
+      <div class="row">
+        <label class="muted small" for="days">Plan the next</label>
+        <select class="input" id="days" style="width:auto"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option></select>
+        <button class="btn primary" id="plan">Suggest sessions</button>
+      </div>
+    </div>
+    <div id="plan-summary" class="card" hidden style="margin-top:12px"></div>
+    <div id="suggestions" class="stack" style="margin-top:12px"></div>
+    <h3>Booked</h3>
+    <div id="booked" class="stack"><p class="muted small">No study sessions booked yet.</p></div>
+  </section>
+
+  <!-- INSIGHTS -->
+  <section id="v-insights" hidden>
+    <h2>What Tempo has learned</h2>
+    <div class="card" id="summary"><p class="muted">Loading…</p></div>
+    <div class="row" style="margin-top:8px"><button class="btn" id="learn">Update learning with Claude</button><span class="muted small" id="learn-status"></span></div>
+
+    <h3>When you study</h3>
+    <div class="heat" id="heat-study"></div>
+    <h3>When you're usually busy</h3>
+    <div class="heat" id="heat-busy"></div>
+    <p class="muted small">Includes routines that aren't on your calendar, learned from where you are.</p>
+
+    <h3>Places</h3>
+    <div id="places" class="stack"></div>
+
+    <h3>Location learning</h3>
+    <div class="card stack">
+      <div id="loc-status" class="status">Checking…</div>
+      <div class="row"><button class="btn primary" id="open-guide">Set up location learning</button><button class="btn" id="check-loc">Check now</button></div>
+    </div>
+    <div id="guide" class="card" hidden style="margin-top:10px">
+      <div class="row" style="justify-content:space-between">
+        <strong>Setup guide</strong>
+        <div class="seg" role="group" aria-label="Method">
+          <button id="g-shortcuts" aria-pressed="true">iPhone Shortcuts</button><button id="g-ifttt" aria-pressed="false">IFTTT</button>
+        </div>
+      </div>
+      <p class="small muted">Your phone writes tiny events into a hidden Google calendar. Tempo reads them when you open it. Nothing else can see them.</p>
+      <ol class="steps">
+        <li><b>Make the hidden calendar.</b> On a computer, open <a href="https://calendar.google.com/calendar/r/settings/createcalendar" target="_blank" rel="noopener">Google Calendar → Create new calendar</a> and name it exactly <code>Tempo location</code>. Then untick it in the calendar list so it stays hidden.</li>
+      </ol>
+      <div id="g-steps-shortcuts">
+        <ol class="steps" start="2">
+          <li><b>Sync it to your iPhone.</b> Settings → Calendar → Accounts → your Google account → make sure <b>Calendars</b> is on. You may need to wait a minute for the new calendar to appear.</li>
+          <li><b>Create the shortcut.</b> Shortcuts app → <b>+</b> → name it <code>Tempo ping</code>. Add these two actions:
+            <ul>
+              <li><b>Get Current Location</b></li>
+              <li><b>Add New Event</b>. Calendar: <b>Tempo location</b>. Title: type <code>Tempo </code>, then tap <b>Select Variable</b> → <b>Current Location</b>, tap that bubble and choose <b>Latitude</b>. Type a comma, then add the same variable again with <b>Longitude</b>. Start and End: <b>Current Date</b>.</li>
+            </ul>
+            The title should look like <code>Tempo [Latitude],[Longitude]</code>.
+          </li>
+          <li><b>Test it.</b> Tap ▶ in the shortcut, wait about a minute for it to sync, then tap <b>Check now</b> above.</li>
+          <li><b>Make it run by itself.</b> Shortcuts → <b>Automation</b> → <b>+</b>. For each trigger choose <b>Run Immediately</b> and the action <b>Run Shortcut → Tempo ping</b>:
+            <ul>
+              <li><b>App → Is Opened</b>: choose 3 to 5 apps you use every day. This gives the most samples, spread across your day.</li>
+              <li><b>Time of Day</b> (optional): e.g. 8 AM, 1 PM, 6 PM, 10 PM.</li>
+            </ul>
+          </li>
+        </ol>
+      </div>
+      <div id="g-steps-ifttt" hidden>
+        <ol class="steps" start="2">
+          <li><b>Make an applet per place</b> at <a href="https://ifttt.com/create" target="_blank" rel="noopener">ifttt.com/create</a>.
+            <ul>
+              <li><b>If This:</b> Location → <b>You enter or exit an area</b>. Pick the area, e.g. your library.</li>
+              <li><b>Then That:</b> Google Calendar → <b>Quick add event</b>. Calendar: <b>Tempo location</b>. Text: <code>Tempo {{EnteredOrExited}} Library</code>, with the place name at the end.</li>
+            </ul>
+          </li>
+          <li><b>Allow location</b> for the IFTTT app on your phone (Always).</li>
+          <li><b>Test it</b> by walking in or out of the area, then tap <b>Check now</b> above.</li>
+        </ol>
+        <p class="small muted">IFTTT only knows places you draw yourself, and its free plan limits how many applets you can have. Shortcuts finds new places on its own. You can use both.</p>
+      </div>
+    </div>
+
+    <h3>Preferences</h3>
+    <form id="settings" class="card settings">
+      <label>Session length (minutes)<input class="input" id="s-len" type="number" min="15" step="15"></label>
+      <label>Max sessions per day<input class="input" id="s-max" type="number" min="1" max="6"></label>
+      <label>Earliest start (hour)<input class="input" id="s-early" type="number" min="0" max="23"></label>
+      <label>Latest finish (hour)<input class="input" id="s-late" type="number" min="1" max="24"></label>
+      <label>Gap around events (minutes)<input class="input" id="s-buf" type="number" min="0" step="5"></label>
+      <label>Add study sessions to<select class="input" id="s-cal"></select></label>
+      <label class="wide">Subjects (comma separated)<input class="input" id="s-subjects" placeholder="Maths, Physics, English"></label>
+      <fieldset class="wide" style="border:0;padding:0;margin:0"><legend class="small muted" style="margin-bottom:4px">Calendars to learn from</legend><div id="s-cals" class="row"></div></fieldset>
+      <div class="wide"><button class="btn primary">Save preferences</button></div>
+    </form>
+  </section>
+</div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" data-tab="agenda" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Agenda</button>
+  <button role="tab" data-tab="import" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>Import</button>
+  <button role="tab" data-tab="study" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M9 8h6"/></svg>Study</button>
+  <button role="tab" data-tab="insights" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Insights</button>
+</nav>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+"use strict";
+const GCAL = "Google Calendar";
+const RELAY_NAME = "tempo location";
+const DAY = 864e5, HOUR = 36e5, MIN = 6e4;
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const CATS = ["class", "study", "exam_or_deadline", "work", "exercise", "social", "meal", "commute", "appointment", "other"];
+const BUSY_CATS = new Set(["class", "work", "exercise", "social", "meal", "appointment", "commute"]);
+const STUDY_KINDS = new Set(["library", "school", "cafe"]);
+const AWAY_KINDS = new Set(["gym", "social", "work"]);
+const KINDS = ["unknown", "home", "school", "library", "cafe", "work", "gym", "social", "other"];
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// ---------------------------------------------------------------- state
+let db = null, mcp = null, sample = null, uid = null, stateRef = null;
+let cals = [], relayCal = null, events = [], relay = [], loadedAt = 0;
+const S = {                 // persisted per user (private) in the artifact's db
+  settings: { sessionMinutes: 60, maxPerDay: 2, earliestHour: 8, latestHour: 22, bufferMinutes: 15, subjects: [], studyCal: "", learnCals: null },
+  places: [],               // {id, name, kind, lat?, lng?, guessed}
+  titleCats: {},            // event title -> category (learned by Claude)
+  proposals: [],            // {id, start, end, subject, reason, status, eventId}
+};
+
+function toast(msg, ms = 3000) {
+  const t = $("#toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast.h); toast.h = setTimeout(() => { t.hidden = true; }, ms);
+}
+function banner(html) { const b = $("#banner"); b.innerHTML = html; b.hidden = !html; }
+
+let saveTimer = null, saving = Promise.resolve();
+function save() {
+  if (!stateRef) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    S.proposals = S.proposals.slice(-300);
+    const keys = Object.keys(S.titleCats);
+    if (keys.length > 1500) for (const k of keys.slice(0, keys.length - 1500)) delete S.titleCats[k];
+    const snapshot = JSON.parse(JSON.stringify(S));
+    saving = saving.then(() => stateRef.set(snapshot)).catch((e) => {
+      if (e?.code === "quota_exceeded") toast("Storage is full. Delete some places to free space.");
+    });
+  }, 600);
+}
+
+// ---------------------------------------------------------------- time helpers
+const partsFmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", weekday: "short", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+function lp(ms) {
+  const p = Object.fromEntries(partsFmt.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return { dow: DAYS.indexOf(p.weekday), hour: +p.hour, minute: +p.minute, key: `${p.year}-${p.month}-${p.day}` };
+}
+const pad = (n) => String(n).padStart(2, "0");
+function localISO(ms) { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`; }
+const fTime = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const fDay = (ms) => new Date(ms).toLocaleDateString([], { weekday: "long", day: "numeric", month: "short" });
+const fShort = (ms) => new Date(ms).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+const slotLabel = (a, b) => `${fShort(a)}, ${fTime(a)}–${fTime(b)}`;
+function ago(ms) { const m = Math.round((Date.now() - ms) / MIN); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; }
+function eachQuarter(a, b, fn) { for (let t = a; t < b; t += 15 * MIN) { const p = lp(t); fn(p.dow, p.hour, 0.25); } }
+const grid = () => Array.from({ length: 7 }, () => Array(24).fill(0));
+
+// ---------------------------------------------------------------- Google Calendar via connector
+function mcpMessage(e) {
+  switch (e?.code) {
+    case "server_not_connected": case "server_not_found":
+      return `Connect <b>Google Calendar</b> in claude.ai → Settings → Connectors, then reload this page.`;
+    case "needs_reauth": return `Google Calendar needs reconnecting: claude.ai → Settings → Connectors → Google Calendar.`;
+    case "selection_required": return `You have more than one Google Calendar connector. Choose one in the prompt claude.ai shows, then reload.`;
+    case "not_in_manifest": case "approval_required": case "not_granted":
+      return `Tempo needs your permission to use Google Calendar. Tap <b>Refresh</b> and choose Allow.`;
+    case "blocked_by_policy": return `Your organization doesn't allow this page to use Google Calendar.`;
+    case "server_unavailable": case "upstream_error": return `Google Calendar didn't answer. Try <b>Refresh</b> in a moment.`;
+    default: return `Couldn't reach Google Calendar (${esc(e?.code || "error")}).`;
+  }
+}
+async function gcal(tool, input, opts) { return (await mcp.callTool(GCAL, tool, input, opts)).payload; }
+
+async function listAll(calendarId, from, to, refresh) {
+  const out = []; let pageToken;
+  for (let i = 0; i < 12; i++) {
+    const p = await gcal("list_events", { calendarId, startTime: localISO(from), endTime: localISO(to), orderBy: "startTime", pageSize: 250, ...(pageToken ? { pageToken } : {}) },
+      { cache: refresh ? { refresh: true, staleTime: 5 * MIN, gcTime: 30 * MIN } : { staleTime: 5 * MIN, gcTime: 30 * MIN } });
+    out.push(...(p?.events || []));
+    pageToken = p?.nextPageToken; if (!pageToken) break;
+  }
+  return out;
+}
+function toEvent(e, cal) {
+  if (!e?.start || e.status === "cancelled") return null;
+  const allDay = !!e.start.date;
+  const start = allDay ? new Date(e.start.date + "T00:00:00").getTime() : Date.parse(e.start.dateTime);
+  const end = allDay ? new Date((e.end?.date || e.start.date) + "T00:00:00").getTime() : Date.parse(e.end?.dateTime || e.start.dateTime);
+  if (!Number.isFinite(start)) return null;
+  return { id: e.id, start, end: Math.max(end, start), allDay, title: e.summary || "(no title)", location: e.location || "", desc: e.description || "",
+    cal: cal.summary, calId: cal.id, free: e.transparency === "transparent" };
+}
+
+async function loadCalendars(refresh = false) {
+  const p = await gcal("list_calendars", {}, { cache: refresh ? { refresh: true, staleTime: 30 * MIN, gcTime: DAY } : { staleTime: 30 * MIN, gcTime: DAY } });
+  cals = (p?.calendars || []).filter((c) => c.id);
+  relayCal = cals.find((c) => (c.summary || "").trim().toLowerCase() === RELAY_NAME) || null;
+  const learnable = cals.filter((c) => c !== relayCal && !/holiday|#holiday@|birthdays/i.test(c.id + c.summary));
+  if (!S.settings.learnCals) S.settings.learnCals = learnable.map((c) => c.id);
+  if (!S.settings.studyCal) S.settings.studyCal = (cals.find((c) => c.primary) || cals.find((c) => /@gmail\.com$|@googlemail\.com$/.test(c.id)) || learnable[0] || {}).id || "";
+}
+
+async function loadData(refresh = false) {
+  const from = Date.now() - 56 * DAY, to = Date.now() + 21 * DAY;
+  const use = cals.filter((c) => S.settings.learnCals.includes(c.id));
+  const lists = await Promise.all(use.map((c) => listAll(c.id, from, to, refresh).then((evs) => evs.map((e) => toEvent(e, c)).filter(Boolean))));
+  events = lists.flat().sort((a, b) => a.start - b.start);
+  relay = relayCal ? (await listAll(relayCal.id, from, Date.now() + HOUR, refresh)).map((e) => toEvent(e, relayCal)).filter(Boolean) : [];
+  loadedAt = Date.now();
+}
+
+// ---------------------------------------------------------------- location relay -> pings & visits
+const COORD = /(-?\d{1,2}\.\d{3,})\s*[,;\s]\s*(-?\d{1,3}\.\d{3,})/;
+const IFTTT = /\b(entered|exited|arrived(?: at)?|left)\b\s+(.+)$/i;
+function parseRelay() {
+  const pings = [], marks = [];
+  for (const e of relay) {
+    const text = `${e.title} ${e.location} ${e.desc}`;
+    const m = text.match(COORD);
+    if (m) { const lat = +m[1], lng = +m[2]; if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) pings.push({ ts: e.start, lat, lng }); continue; }
+    const n = e.title.replace(/^tempo\s*/i, "").match(IFTTT);
+    if (n) marks.push({ ts: e.start, enter: /^(entered|arrived)/i.test(n[1]), name: n[2].replace(/\s+at\s+\d.*$/i, "").trim() });
+  }
+  return { pings: pings.sort((a, b) => a.ts - b.ts), marks: marks.sort((a, b) => a.ts - b.ts) };
+}
+function dist(a, b) {
+  const R = 6371000, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const newId = () => Math.random().toString(36).slice(2, 10);
+function guessKind(name) {
+  const n = name.toLowerCase();
+  return /home|house/.test(n) ? "home" : /library|lib\b/.test(n) ? "library" : /school|college|uni|campus/.test(n) ? "school"
+    : /gym|fitness|pool|oval|court|field/.test(n) ? "gym" : /cafe|coffee/.test(n) ? "cafe" : /work|office|shop/.test(n) ? "work" : "unknown";
+}
+function nearestPlace(p) {
+  let best = null, bd = Infinity;
+  for (const pl of S.places) if (pl.lat != null) { const d = dist(pl, p); if (d < 130 && d < bd) { best = pl; bd = d; } }
+  return best;
+}
+/** Turn raw location into places + visits. New places appear after >= 5 samples within 120 m on 2+ days. */
+function learnPlaces(pings, marks) {
+  let changed = false;
+  const loose = pings.filter((p) => !nearestPlace(p));
+  const used = new Set();
+  for (const p of loose) {
+    if (used.has(p)) continue;
+    const nb = loose.filter((q) => !used.has(q) && dist(p, q) < 120);
+    if (nb.length < 5 || new Set(nb.map((q) => lp(q.ts).key)).size < 2) continue;
+    const pl = { id: newId(), name: "", kind: "unknown", lat: nb.reduce((s, q) => s + q.lat, 0) / nb.length, lng: nb.reduce((s, q) => s + q.lng, 0) / nb.length, guessed: false };
+    S.places.push(pl); nb.forEach((q) => used.add(q)); changed = true;
+  }
+  for (const m of marks) {
+    if (!S.places.some((pl) => pl.name.toLowerCase() === m.name.toLowerCase())) {
+      S.places.push({ id: newId(), name: m.name, kind: guessKind(m.name), guessed: false }); changed = true;
+    }
+  }
+  if (changed) save();
+  // visits: consecutive samples at one place (gap <= 75 min), plus enter/exit pairs
+  const visits = []; let cur = null;
+  for (const p of pings) {
+    const pl = nearestPlace(p);
+    if (cur && pl && pl.id === cur.place.id && p.ts - cur.end <= 75 * MIN) { cur.end = p.ts; continue; }
+    if (cur) visits.push(cur);
+    cur = pl ? { place: pl, start: p.ts, end: p.ts } : null;
+  }
+  if (cur) visits.push(cur);
+  const open = new Map();
+  for (const m of marks) {
+    const pl = S.places.find((x) => x.name.toLowerCase() === m.name.toLowerCase());
+    if (!pl) continue;
+    if (m.enter) open.set(pl.id, m.ts);
+    else { const s = open.get(pl.id); if (s && m.ts - s < 14 * HOUR) visits.push({ place: pl, start: s, end: m.ts }); open.delete(pl.id); }
+  }
+  return visits.map((v) => ({ ...v, end: Math.max(v.end, v.start + 20 * MIN) }));
+}
+
+// ---------------------------------------------------------------- categories
+function heuristic(e) {
+  const t = e.title.toLowerCase();
+  if (/^📚 study:/.test(t) || /\b(study|revis|homework|hw\b|prep\b|review)/.test(t)) return "study";
+  if (/\b(exam|test|quiz|due|deadline|assessment)\b/.test(t)) return "exam_or_deadline";
+  if (/school|class|timetable|uni\b|lecture/.test(e.cal.toLowerCase())) return "class";
+  if (/\b(gym|training|practice|run|swim|soccer|football|footy|netball|basketball|cricket|tennis|dance)\b/.test(t)) return "exercise";
+  if (/\b(shift|work)\b/.test(t)) return "work";
+  if (/\b(dinner|lunch|breakfast|brunch)\b/.test(t)) return "meal";
+  if (/\b(party|birthday|hang ?out|movie|concert|drinks)\b/.test(t)) return "social";
+  if (/\b(doctor|dentist|appt|appointment|physio|orthodontist)\b/.test(t)) return "appointment";
+  return null;
+}
+const catOf = (e) => S.titleCats[e.title] || heuristic(e);
+const isTempoStudy = (e) => /^📚 Study:/.test(e.title);
+
+// ---------------------------------------------------------------- habit model
+let model = null;
+function buildModel() {
+  const now = Date.now(), from = now - 56 * DAY;
+  const { pings, marks } = parseRelay();
+  const visits = learnPlaces(pings, marks);
+  verifySessions(pings, visits);
+  const study = grid(), busy = grid(), pref = grid();
+  const why = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({})));
+  const past = events.filter((e) => !e.allDay && !e.free && e.start >= from && e.end <= now);
+  for (const e of past) {
+    if (isTempoStudy(e)) continue;
+    const c = catOf(e);
+    if (c === "study") eachQuarter(e.start, e.end, (d, h, w) => { study[d][h] += w; });
+    else if (BUSY_CATS.has(c)) eachQuarter(e.start, e.end, (d, h, w) => { busy[d][h] += w; why[d][h][c] = (why[d][h][c] || 0) + w; });
+  }
+  for (const v of visits) {
+    const k = v.place.kind, label = v.place.name || k;
+    if (STUDY_KINDS.has(k)) eachQuarter(v.start, v.end, (d, h, w) => { study[d][h] += 0.5 * w; });
+    else if (AWAY_KINDS.has(k)) eachQuarter(v.start, v.end, (d, h, w) => { busy[d][h] += w; why[d][h][`at ${label}`] = (why[d][h][`at ${label}`] || 0) + w; });
+  }
+  const weight = { completed: 1.5, accepted: 0.4, rejected: -1, skipped: -1.5 };
+  for (const p of S.proposals) if (weight[p.status]) eachQuarter(p.start, p.end, (d, h, w) => { pref[d][h] += weight[p.status] * w; });
+  const first = Math.min(past[0]?.start ?? now, pings[0]?.ts ?? now, marks[0]?.ts ?? now);
+  const weeks = Math.max(1, Math.min(8, (now - first) / (7 * DAY)));
+  for (const g of [study, busy]) for (const r of g) for (let h = 0; h < 24; h++) r[h] /= weeks;
+  const blur = (g) => g.map((r) => r.map((v, h) => 0.6 * v + 0.2 * (r[h - 1] || 0) + 0.2 * (r[h + 1] || 0)));
+  const sb = blur(study), mx = Math.max(0.25, ...sb.flat());
+  const outcomes = {}; for (const p of S.proposals) outcomes[p.status] = (outcomes[p.status] || 0) + 1;
+  const lastPing = Math.max(0, ...relay.map((e) => e.start).filter((t) => t <= now + HOUR));
+  model = { study: sb.map((r) => r.map((v) => v / mx)), busy, pref, why, visits, weeks: +weeks.toFixed(1), pings: pings.length + marks.length, past: past.length, outcomes, lastPing };
+}
+function topWhy(d, h) { return Object.entries(model.why[d][h]).sort((a, b) => b[1] - a[1])[0]?.[0]; }
+function score(a, b) {
+  let s = 0, n = 0; const why = new Set();
+  eachQuarter(a, b, (d, h) => {
+    const st = model.study[d][h], bz = Math.min(1, model.busy[d][h]), pf = model.pref[d][h];
+    s += st - 1.2 * bz + 0.5 * Math.tanh(pf) - (h >= 22 || h < 7 ? 0.3 : 0); n++;
+    if (st > 0.5) why.add("you often study around now");
+    if (bz > 0.4) { const w = topWhy(d, h); why.add(`usually busy${w ? ` (${w.replace(/_/g, " ")})` : ""}`); }
+    if (pf > 0.5) why.add("you've followed through at this time before");
+    if (pf < -0.5) why.add("you've skipped or declined this time before");
+  });
+  return { score: s / Math.max(1, n), why: [...why] };
+}
+function candidates(days) {
+  const st = S.settings, dur = st.sessionMinutes * MIN, buf = st.bufferMinutes * MIN, step = 30 * MIN;
+  const busyIv = events.filter((e) => !e.allDay && !e.free && e.end > Date.now()).map((e) => [e.start, e.end])
+    .concat(S.proposals.filter((p) => p.status === "accepted" && p.end > Date.now()).map((p) => [p.start, p.end]));
+  const all = [];
+  for (let t = Math.ceil((Date.now() + 30 * MIN) / step) * step; t + dur <= Date.now() + days * DAY; t += step) {
+    const a = lp(t), b = lp(t + dur - 1);
+    if (a.hour < st.earliestHour || a.key !== b.key || b.hour + (b.minute + 1) / 60 > st.latestHour) continue;
+    if (busyIv.some(([s, e]) => t < e + buf && t + dur > s - buf)) continue;
+    all.push({ start: t, end: t + dur, key: a.key, ...score(t, t + dur) });
+  }
+  all.sort((x, y) => y.score - x.score);
+  const out = [], per = {};
+  for (const c of all) {
+    if ((per[c.key] || 0) >= st.maxPerDay + 2 || out.some((o) => c.start < o.end + step && c.end > o.start - step)) continue;
+    out.push(c); per[c.key] = (per[c.key] || 0) + 1;
+    if (out.length >= 24) break;
+  }
+  return out.sort((x, y) => x.start - y.start);
+}
+function describe() {
+  const L = [];
+  L.push(`Based on ${model.weeks} week(s): ${model.past} calendar events and ${model.pings} location updates.`);
+  const top = (g, k) => g.flatMap((r, d) => r.map((v, h) => ({ d, h, v }))).filter((x) => x.v > 0.15).sort((a, b) => b.v - a.v).slice(0, k);
+  const st = top(model.study, 6), bz = top(model.busy, 8);
+  L.push(st.length ? `You usually study: ${st.map(({ d, h }) => `${DAYS[d]} ${h}:00`).join(", ")}.` : "No clear study habit yet. Tempo learns from study events and the sessions you complete.");
+  if (bz.length) L.push(`You're usually busy: ${bz.map(({ d, h }) => { const w = topWhy(d, h); return `${DAYS[d]} ${h}:00${w ? ` (${w.replace(/_/g, " ")})` : ""}`; }).join(", ")}.`);
+  const o = model.outcomes;
+  L.push(`Past suggestions: ${o.completed || 0} done, ${o.skipped || 0} skipped, ${o.rejected || 0} declined.`);
+  const named = S.places.filter((p) => p.name); if (named.length) L.push(`Places: ${named.map((p) => `${p.name} (${p.kind})`).join(", ")}.`);
+  return L;
+}
+
+/** Location check of booked sessions that have ended: at a study place or home = done, at gym/social/work = skipped. */
+function verifySessions(pings, visits) {
+  let changed = false;
+  for (const s of S.proposals) {
+    if (s.status !== "accepted" || s.end > Date.now()) continue;
+    let good = 0, bad = 0;
+    for (const p of pings) if (p.ts >= s.start && p.ts <= s.end) {
+      const k = nearestPlace(p)?.kind; if (STUDY_KINDS.has(k) || k === "home") good++; else bad++;
+    }
+    for (const v of visits) if (v.start < s.end && v.end > s.start) { if (STUDY_KINDS.has(v.place.kind) || v.place.kind === "home") good++; else if (AWAY_KINDS.has(v.place.kind)) bad++; }
+    if (good > bad) { s.status = "completed"; changed = true; } else if (bad > good) { s.status = "skipped"; changed = true; }
+  }
+  if (changed) save();
+}
+
+// ---------------------------------------------------------------- Claude
+function sampleMessage(e) {
+  switch (e?.code) {
+    case "not_granted": case "sampling_disabled": case "not_declared": case "capability_disabled": case "capability_removed":
+      return "Claude isn't available on this page. Allow it when claude.ai asks, then try again.";
+    case "rate_limited": return "You've hit a usage limit. Try again a bit later.";
+    case "session_expired": return "Sign in to claude.ai again, then retry.";
+    case "image_rejected": return "That image couldn't be read. Try a PNG or JPEG screenshot.";
+    case "images_unavailable": return "This view can't send images to Claude.";
+    case "refused": return "Claude declined that request. Try different wording or another image.";
+    case "invalid_json": case "empty_completion": return "Claude's answer came back incomplete. Try again.";
+    case "prompt_too_large": return "That's too much at once. Try a shorter plan window.";
+    default: return "Claude didn't answer. Try again.";
+  }
+}
+async function categorise() {
+  const titles = [...new Set(events.filter((e) => !S.titleCats[e.title] && !isTempoStudy(e)).map((e) => e.title))].slice(0, 150);
+  if (!titles.length) return 0;
+  const out = await sample.json(
+    `Classify each calendar event title of a student into exactly one category from: ${CATS.join(", ")}.\n` +
+    `Reply with only a JSON object mapping each title (verbatim) to its category.\n\nTitles:\n${titles.map((t) => JSON.stringify(t)).join("\n")}`,
+    { modelTier: "quick" });
+  let n = 0;
+  for (const [k, v] of Object.entries(out || {})) if (titles.includes(k) && CATS.includes(v)) { S.titleCats[k] = v; n++; }
+  save(); return n;
+}
+async function namePlaces() {
+  const todo = S.places.filter((p) => !p.name && p.lat != null).slice(0, 4);
+  for (const pl of todo) {
+    const vs = model.visits.filter((v) => v.place.id === pl.id);
+    if (vs.length < 2) continue;
+    const titles = new Set(), hours = {};
+    for (const v of vs) {
+      for (const e of events) if (!e.allDay && e.start < v.end && e.end > v.start) titles.add(e.title + (e.location ? ` @ ${e.location}` : ""));
+      const p = lp(v.start); const k = `${DAYS[p.dow]} ${p.hour}:00`; hours[k] = (hours[k] || 0) + 1;
+    }
+    const g = await sample.json(
+      `Guess what place a student regularly visits. Calendar events during visits: ${[...titles].slice(0, 15).join(" | ") || "(none)"}. ` +
+      `Usual times there: ${Object.entries(hours).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k]) => k).join(", ")}. ` +
+      `Reply with only JSON {"name": short name, "kind": one of ${KINDS.slice(1).join("|")}}.`, { modelTier: "quick" });
+    if (g?.name) { pl.name = String(g.name).slice(0, 40); pl.kind = KINDS.includes(g.kind) ? g.kind : "other"; pl.guessed = true; }
+  }
+  save();
+}
+
+// ---------------------------------------------------------------- rendering
+function render() {
+  buildModel();
+  renderAgenda(); renderStudy(); renderInsights();
+}
+function evCard(e) {
+  const c = catOf(e);
+  return `<div class="ev ${c === "study" ? "study" : ""}"><div class="t">${e.allDay ? "All day" : `${fTime(e.start)}<br>${fTime(e.end)}`}</div>
+    <div class="b"><div class="title">${esc(e.title)}${c ? `<span class="chip">${esc(c.replace(/_/g, " "))}</span>` : ""}</div>
+    <div class="meta">${e.location ? `${esc(e.location)} · ` : ""}${esc(e.cal)}</div></div></div>`;
+}
+function suggestCard(p, withDate) {
+  return `<div class="ev suggest" data-pid="${p.id}"><div class="t">${withDate ? `${esc(fShort(p.start))}<br>` : ""}${fTime(p.start)}–${fTime(p.end)}</div>
+    <div class="b"><div class="title">${esc(p.subject)}<span class="chip">suggested</span></div><div class="meta">${esc(p.reason)}</div>
+    <div class="row" style="margin-top:8px"><button class="btn primary small" data-act="accept">Add to calendar</button><button class="btn small" data-act="reject">Not then</button></div></div></div>`;
+}
+function renderAgenda() {
+  const now = Date.now(), today = lp(now).key;
+  const items = [...events.filter((e) => e.end > now - HOUR && e.start < now + 14 * DAY).map((e) => ({ k: "e", t: e.start, e })),
+    ...S.proposals.filter((p) => p.status === "proposed" && p.end > now).map((p) => ({ k: "p", t: p.start, p }))].sort((a, b) => a.t - b.t);
+  const checks = S.proposals.filter((p) => p.status === "accepted" && p.end <= now);
+  $("#checkins").innerHTML = checks.map((p) => `<div class="card notice" data-pid="${p.id}"><b>Did you study ${esc(p.subject.replace(/^📚 Study:\s*/, ""))}?</b>
+    <div class="muted small">${esc(slotLabel(p.start, p.end))}</div>
+    <div class="row" style="margin-top:8px"><button class="btn primary small" data-act="done">Yes</button><button class="btn small" data-act="skipped">I skipped it</button></div></div>`).join("");
+  if (!items.length) { $("#agenda").innerHTML = `<div class="empty">Nothing in the next two weeks.<br>Import a screenshot, or plan some study time.</div>`; return; }
+  let html = "", cur = "";
+  for (const it of items) {
+    const k = lp(it.t).key;
+    if (k !== cur) { cur = k; const rel = k === today ? "Today" : k === lp(now + DAY).key ? "Tomorrow" : ""; html += `<div class="day">${esc(fDay(it.t))}${rel ? `<span class="rel">${rel}</span>` : ""}</div>`; }
+    html += it.k === "e" ? evCard(it.e) : suggestCard(it.p, false);
+  }
+  $("#agenda").innerHTML = html;
+}
+function renderStudy() {
+  const now = Date.now();
+  $("#suggestions").innerHTML = S.proposals.filter((p) => p.status === "proposed" && p.end > now).map((p) => suggestCard(p, true)).join("");
+  const booked = S.proposals.filter((p) => p.status === "accepted" && p.end > now).sort((a, b) => a.start - b.start);
+  $("#booked").innerHTML = booked.length ? booked.map((p) => `<div class="ev study"><div class="t">${esc(fShort(p.start))}<br>${fTime(p.start)}</div><div class="b"><div class="title">${esc(p.subject)}</div><div class="meta">${esc(p.reason)}</div></div></div>`).join("")
+    : `<p class="muted small">No study sessions booked yet.</p>`;
+}
+function heat(sel, g, rgb) {
+  const max = Math.max(0.01, ...g.flat());
+  let h = `<div></div>`; for (let x = 6; x < 24; x++) h += `<div class="h">${x % 3 === 0 ? x : ""}</div>`;
+  DAYS.forEach((d, i) => { h += `<div>${d}</div>`; for (let x = 6; x < 24; x++) { const a = Math.min(1, Math.max(0, g[i][x]) / max); h += `<div class="c" title="${d} ${x}:00" style="${a > 0.03 ? `background:rgba(var(${rgb}),${(0.15 + 0.85 * a).toFixed(2)})` : ""}"></div>`; } });
+  $(sel).innerHTML = h;
+}
+function renderInsights() {
+  $("#summary").innerHTML = describe().map((l) => `<p>${esc(l)}</p>`).join("");
+  heat("#heat-study", model.study.map((r, d) => r.map((v, h) => v + 0.3 * Math.tanh(model.pref[d][h]))), "--study");
+  heat("#heat-busy", model.busy, "--busy");
+  const hours = (pl) => (model.visits.filter((v) => v.place.id === pl.id).reduce((s, v) => s + v.end - v.start, 0) / HOUR).toFixed(1);
+  $("#places").innerHTML = S.places.length ? S.places.map((pl) => `<div class="card place" data-place="${pl.id}">
+      <input class="input" id="pn-${pl.id}" value="${esc(pl.name)}" placeholder="Name this place" aria-label="Place name">
+      <select class="input" id="pk-${pl.id}" aria-label="Place type">${KINDS.map((k) => `<option ${k === pl.kind ? "selected" : ""}>${k}</option>`).join("")}</select>
+      <div class="row"><button class="btn small" data-pact="save">Save</button><button class="btn small ghost" data-pact="del" aria-label="Forget place">Forget</button></div>
+      <div class="muted small" style="grid-column:1/-1">${hours(pl)} h in the last 8 weeks${pl.guessed ? " · named by Claude" : ""}${pl.lat != null ? ` · <a href="https://maps.google.com/?q=${pl.lat.toFixed(5)},${pl.lng.toFixed(5)}" target="_blank" rel="noopener">map</a>` : ""}</div></div>`).join("")
+    : `<p class="muted small">No places yet. They appear after you've spent time somewhere on two different days.</p>`;
+  const ls = $("#loc-status");
+  if (!relayCal) { ls.className = "status"; ls.textContent = "Not set up. Start with step 1 of the guide."; }
+  else if (!relay.length) { ls.className = "status"; ls.textContent = "Found your “Tempo location” calendar. Waiting for your phone's first update."; }
+  else { ls.className = "status ok"; ls.textContent = `Location learning is on. Last update ${ago(model.lastPing)}, ${model.pings} in the last 8 weeks.`; }
+  const st = S.settings;
+  $("#s-len").value = st.sessionMinutes; $("#s-max").value = st.maxPerDay; $("#s-early").value = st.earliestHour; $("#s-late").value = st.latestHour;
+  $("#s-buf").value = st.bufferMinutes; $("#s-subjects").value = st.subjects.join(", ");
+  const writable = cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
+  $("#s-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === st.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
+  $("#s-cals").innerHTML = cals.filter((c) => c !== relayCal).map((c, i) => `<label class="row small" style="gap:6px;color:var(--ink)"><input type="checkbox" id="lc-${i}" value="${esc(c.id)}" ${st.learnCals.includes(c.id) ? "checked" : ""}>${esc(c.summary)}</label>`).join("");
+  $("#x-cal") && ($("#x-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === st.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join(""));
+}
+
+// ---------------------------------------------------------------- actions
+async function busy(btn, label, fn) {
+  const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spin"></span>${label}`;
+  try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = old; }
+}
+async function refresh(force) {
+  try {
+    await loadCalendars(force); await loadData(force);
+    banner(""); render();
+  } catch (e) {
+    banner(mcpMessage(e));
+    if (!events.length) $("#agenda").innerHTML = `<div class="empty">Your calendar will show here once Google Calendar is connected.</div>`;
+  }
+}
+$("#refresh").addEventListener("click", (e) => busy(e.currentTarget, "Refreshing", () => refresh(true)));
+$("#check-loc").addEventListener("click", (e) => busy(e.currentTarget, "Checking", async () => { await refresh(true); toast(relay.length ? `Last update ${ago(model.lastPing)}` : "No location updates found yet"); }));
+
+document.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-act]"); if (!b) return;
+  const p = S.proposals.find((x) => x.id === b.closest("[data-pid]")?.dataset.pid); if (!p) return;
+  const act = b.dataset.act;
+  if (act === "accept") {
+    await busy(b, "Adding", async () => {
+      try {
+        const r = await gcal("create_event", { calendarId: S.settings.studyCal || undefined, summary: `📚 Study: ${p.subject}`, startTime: localISO(p.start), endTime: localISO(p.end),
+          description: `Planned by Tempo. ${p.reason}`, colorId: "2" });
+        p.status = "accepted"; p.eventId = r?.id ?? r?.event?.id ?? null; save();
+        toast("Added to Google Calendar");
+        await mcp.invalidate(GCAL, "list_events").catch(() => {});
+        await refresh(true);
+      } catch (e) { toast(e?.code === "tool_error" ? "Google Calendar refused that event." : mcpMessage(e).replace(/<[^>]+>/g, ""), 5000); }
+    });
+  } else if (act === "reject") { p.status = "rejected"; save(); render(); toast("Got it. Tempo will avoid that time."); }
+  else if (act === "done" || act === "skipped") { p.status = act === "done" ? "completed" : "skipped"; save(); render(); toast(act === "done" ? "Nice. Noted." : "Noted. Tempo will adjust."); }
+});
+
+$("#plan").addEventListener("click", (e) => busy(e.currentTarget, "Planning", async () => {
+  if (!sample) return toast("Claude isn't available on this page.");
+  try {
+    await categorise().catch(() => 0);
+    buildModel();
+    const days = +$("#days").value, cand = candidates(days);
+    S.proposals = S.proposals.filter((p) => p.status !== "proposed");
+    if (!cand.length) { $("#plan-summary").hidden = false; $("#plan-summary").textContent = "No free time fits your preferences in that window."; save(); return render(); }
+    const upcoming = events.filter((x) => x.start > Date.now() && x.start < Date.now() + 14 * DAY).slice(0, 150)
+      .map((x) => `${x.allDay ? fShort(x.start) + " (all day)" : slotLabel(x.start, x.end)}\t${x.title}${catOf(x) ? ` [${catOf(x)}]` : ""}`).join("\n");
+    const prompt =
+      `You are the study planner in a student's calendar app. Pick study sessions from the candidate slots below and give each a subject.\n` +
+      `Rules: prioritise subjects with upcoming tests, exams or deadlines and schedule them before the due date with spaced repetition; ` +
+      `prefer higher scores (score reflects when this student actually studies and avoids times they're usually busy); never pick overlapping slots; ` +
+      `at most ${S.settings.maxPerDay} sessions per day; avoid the late evening before an early start. Address the student as "you".\n\n` +
+      `Now: ${new Date().toLocaleString()} (${tz})\nLearned habits:\n${describe().join("\n")}\n` +
+      `Subjects: ${S.settings.subjects.join(", ") || "(infer from their classes)"}\nStudent's goals: ${$("#goals").value.trim() || "(none given)"}\n\n` +
+      `Upcoming calendar:\n${upcoming || "(empty)"}\n\nCandidate slots (index, time, score, signals):\n` +
+      cand.map((c, i) => `${i}\t${slotLabel(c.start, c.end)}\tscore=${c.score.toFixed(2)}\t${c.why.join("; ")}`).join("\n") +
+      `\n\nReply with only JSON: {"sessions":[{"candidate":index,"subject":"what to study","reason":"one short sentence on why this time suits you"}],"summary":"2 sentences on the plan"}`;
+    const plan = await sample.json(prompt, { modelTier: "default", cache: false });
+    const chosen = [];
+    for (const s of plan?.sessions || []) {
+      const c = cand[s.candidate];
+      if (!c || chosen.some((x) => c.start < x.end && c.end > x.start)) continue;
+      chosen.push(c);
+      S.proposals.push({ id: newId(), start: c.start, end: c.end, subject: String(s.subject || "Study").slice(0, 80), reason: String(s.reason || "").slice(0, 200), status: "proposed" });
+    }
+    $("#plan-summary").hidden = false; $("#plan-summary").textContent = plan?.summary || `${chosen.length} sessions suggested.`;
+    save(); render();
+  } catch (err) { toast(sampleMessage(err), 5000); }
+}));
+
+$("#learn").addEventListener("click", (e) => busy(e.currentTarget, "Learning", async () => {
+  if (!sample) return toast("Claude isn't available on this page.");
+  try {
+    const n = await categorise(); buildModel(); await namePlaces(); render();
+    $("#learn-status").textContent = `Sorted ${n} new event types.`;
+  } catch (err) { toast(sampleMessage(err), 5000); }
+}));
+
+$("#places").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-pact]"); if (!b) return;
+  const id = b.closest("[data-place]").dataset.place, pl = S.places.find((x) => x.id === id); if (!pl) return;
+  if (b.dataset.pact === "save") { pl.name = $(`#pn-${id}`).value.trim(); pl.kind = $(`#pk-${id}`).value; pl.guessed = false; toast("Saved"); }
+  else if (b.dataset.pact === "del") {
+    if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Tap again to forget"; return; }
+    S.places = S.places.filter((x) => x.id !== id); toast("Place forgotten");
+  }
+  save(); render();
+});
+
+$("#settings").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const st = S.settings, num = (sel, d) => { const v = Number($(sel).value); return Number.isFinite(v) && $(sel).value !== "" ? v : d; };
+  st.sessionMinutes = num("#s-len", 60); st.maxPerDay = num("#s-max", 2); st.earliestHour = num("#s-early", 8); st.latestHour = num("#s-late", 22); st.bufferMinutes = num("#s-buf", 15);
+  st.subjects = $("#s-subjects").value.split(",").map((s) => s.trim()).filter(Boolean);
+  st.studyCal = $("#s-cal").value; st.learnCals = [...document.querySelectorAll("#s-cals input:checked")].map((i) => i.value);
+  save(); toast("Preferences saved"); refresh(false);
+});
+
+// guide
+$("#open-guide").addEventListener("click", () => { $("#guide").hidden = !$("#guide").hidden; });
+function guideMode(m) {
+  $("#g-shortcuts").setAttribute("aria-pressed", m === "s"); $("#g-ifttt").setAttribute("aria-pressed", m === "i");
+  $("#g-steps-shortcuts").hidden = m !== "s"; $("#g-steps-ifttt").hidden = m !== "i";
+}
+$("#g-shortcuts").addEventListener("click", () => guideMode("s"));
+$("#g-ifttt").addEventListener("click", () => guideMode("i"));
+
+// tabs
+function openTab(name) {
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === name));
+  for (const v of ["agenda", "import", "study", "insights"]) $(`#v-${v}`).hidden = v !== name;
+  try { localStorage.setItem("tempo.tab", name); } catch {}
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => openTab(b.dataset.tab)));
+
+// ---------------------------------------------------------------- screenshot import
+let img = null, extracted = [];
+function setImage(f) {
+  if (!f || !f.type.startsWith("image/")) return;
+  img = f; const p = $("#preview"); p.src = URL.createObjectURL(f); p.hidden = false; $("#drop-text").hidden = true;
+  $("#extract").disabled = !sample; $("#extracted").innerHTML = ""; $("#x-status").textContent = sample ? "" : "Claude isn't available on this page.";
+}
+$("#file").addEventListener("change", (e) => setImage(e.target.files[0]));
+const drop = $("#drop");
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); setImage(e.dataTransfer.files[0]); });
+document.addEventListener("paste", (e) => { const f = [...(e.clipboardData?.files || [])].find((x) => x.type.startsWith("image/")); if (f) { openTab("import"); setImage(f); } });
+
+$("#extract").addEventListener("click", (e) => busy(e.currentTarget, "Reading", async () => {
+  try {
+    const out = await sample.json(
+      `Extract every calendar-worthy event from this screenshot (it may be a class timetable, syllabus, email, flyer, ticket, or chat).\n` +
+      `Current date and time: ${new Date().toLocaleString([], { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${tz}).\n` +
+      `Resolve relative dates against that. If a year is missing, use the next occurrence. Weekly timetable classes become ONE event each with a weekly RRULE ` +
+      `(e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20261212T235959Z", set UNTIL only if a term end is visible). Deadlines without a time are all-day events titled "Due: ..." or "Exam: ...". ` +
+      `Never invent events.${$("#hint").value.trim() ? `\nStudent's note: ${$("#hint").value.trim()}` : ""}\n` +
+      `Reply with only JSON: {"events":[{"title":"","start":"YYYY-MM-DDTHH:MM or YYYY-MM-DD if all day","end":"same format","all_day":false,"location":"","recurrence":null,"confidence":"high|medium|low"}],"note":"anything ambiguous, or empty"}`,
+      { images: [img], modelTier: "default", cache: false });
+    extracted = Array.isArray(out?.events) ? out.events : [];
+    $("#x-status").textContent = extracted.length ? `Found ${extracted.length}. ${out.note || ""}` : `No events found. ${out?.note || ""}`;
+    renderExtracted();
+  } catch (err) { $("#x-status").textContent = sampleMessage(err); }
+}));
+function renderExtracted() {
+  if (!extracted.length) { $("#extracted").innerHTML = ""; return; }
+  $("#extracted").innerHTML = extracted.map((x, i) => `<div class="card xev ${x.confidence === "low" ? "low" : ""}" data-i="${i}">
+      <input type="checkbox" id="xp-${i}" checked aria-label="Include this event">
+      <div class="fields">
+        <input class="input wide" id="xt-${i}" value="${esc(x.title)}" aria-label="Title">
+        <input class="input" id="xs-${i}" value="${esc(x.start)}" aria-label="Start">
+        <input class="input" id="xe-${i}" value="${esc(x.end || x.start)}" aria-label="End">
+        <input class="input wide" id="xl-${i}" value="${esc(x.location || "")}" placeholder="Location" aria-label="Location">
+        ${x.recurrence ? `<div class="wide small muted">Repeats: ${esc(String(x.recurrence).replace("RRULE:", ""))}</div>` : ""}
+        ${x.confidence && x.confidence !== "high" ? `<div class="wide small muted">${esc(x.confidence)} confidence, so double-check it</div>` : ""}
+      </div></div>`).join("") +
+    `<div class="row"><label class="small muted" for="x-cal">Add to</label><select class="input" id="x-cal" style="width:auto"></select><button class="btn primary" id="x-add">Add selected</button></div>`;
+  const writable = cals.filter((c) => c !== relayCal && !/#holiday@|v\.calendar\.google\.com/.test(c.id));
+  $("#x-cal").innerHTML = writable.map((c) => `<option value="${esc(c.id)}" ${c.id === S.settings.studyCal ? "selected" : ""}>${esc(c.summary)}</option>`).join("");
+  $("#x-add").addEventListener("click", (e) => busy(e.currentTarget, "Adding", async () => {
+    const calId = $("#x-cal").value; let ok = 0, fail = 0;
+    for (let i = 0; i < extracted.length; i++) {
+      if (!$(`#xp-${i}`).checked) continue;
+      const x = extracted[i], s = $(`#xs-${i}`).value.trim(), en = $(`#xe-${i}`).value.trim() || s;
+      const allDay = !!x.all_day || /^\d{4}-\d{2}-\d{2}$/.test(s);
+      const norm = (v) => (v.length === 16 ? v + ":00" : v.slice(0, 19));
+      let startTime, endTime;
+      if (allDay) { const d0 = s.slice(0, 10); let d1 = en.slice(0, 10); if (d1 <= d0) { const t = new Date(d0 + "T12:00:00"); t.setDate(t.getDate() + 1); d1 = localISO(t.getTime()).slice(0, 10); } startTime = d0 + "T00:00:00"; endTime = d1 + "T00:00:00"; }
+      else { startTime = norm(s); endTime = norm(en); if (endTime <= startTime) endTime = localISO(new Date(startTime).getTime() + HOUR); }
+      try {
+        await gcal("create_event", { calendarId: calId || undefined, summary: $(`#xt-${i}`).value.trim() || "Event", startTime, endTime, allDay,
+          location: $(`#xl-${i}`).value.trim() || undefined, recurrenceData: x.recurrence ? [String(x.recurrence)] : undefined });
+        ok++; $(`#xp-${i}`).checked = false;
+      } catch (err) { fail++; if (err?.code !== "tool_error") { toast(mcpMessage(err).replace(/<[^>]+>/g, ""), 5000); break; } }
+    }
+    toast(fail ? `Added ${ok}, ${fail} couldn't be added. Check their times.` : `Added ${ok} event${ok === 1 ? "" : "s"} to Google Calendar`);
+    await mcp.invalidate(GCAL, "list_events").catch(() => {});
+    refresh(true);
+  }));
+}
+
+// ---------------------------------------------------------------- boot
+(async () => {
+  try { openTab(localStorage.getItem("tempo.tab") || "agenda"); } catch { openTab("agenda"); }
+  const [dbNs, userNs, mcpNs, sampleNs] = await Promise.all(["db", "user", "mcp", "sample"].map((n) => window.claude?.use?.(n) ?? Promise.resolve(null)));
+  db = dbNs; mcp = mcpNs; sample = sampleNs;
+  uid = userNs ? await userNs.id().catch(() => null) : null;
+  if (db && uid) {
+    stateRef = db.doc(`data/users/${uid}/tempo`);
+    try {
+      const snap = await Promise.race([stateRef.get(), new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), 10000))]);
+      const d = snap.exists ? snap.data() : null;
+      if (d) { Object.assign(S.settings, d.settings || {}); S.places = d.places || []; S.titleCats = d.titleCats || {}; S.proposals = d.proposals || []; }
+    } catch { /* first visit or slow store: start fresh, saves will catch up */ }
+  }
+  if (!mcp) {
+    banner("Open Tempo on claude.ai while signed in, and connect <b>Google Calendar</b> under Settings → Connectors.");
+    $("#agenda").innerHTML = `<div class="empty">Your calendar will show here once Google Calendar is connected.</div>`;
+    return;
+  }
+  if (!stateRef) toast("Your settings can't be saved in this view.", 5000);
+  await refresh(false);
+})();
+})();
+</script>
