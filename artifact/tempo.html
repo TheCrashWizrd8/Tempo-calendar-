@@ -405,6 +405,7 @@ const S = {                 // persisted per user (private) in the artifact's db
   leaveSet: {},             // event key -> reminder minutes Tempo set (leave-by alerts)
   revision: {},             // exam/due event key -> { n, at } revision already planned
   dismissed: {},            // clash keys / review weeks you hid
+  durations: {},            // subject -> how many minutes sessions actually took (last 10)
   proposals: [],            // {id, start, end, subject, reason, status, eventId}
 };
 
@@ -419,7 +420,7 @@ function banner(html) { const b = $("#banner"); b.innerHTML = html; b.hidden = !
 // (proposals/<id>), so two open copies of Tempo can't overwrite each other's changes. Every copy listens
 // for changes live, and nothing is written until this device has loaded what's already saved.
 const DEFAULT_SETTINGS = JSON.parse(JSON.stringify(S.settings));
-const STATE_KEYS = ["settings", "places", "titleCats", "travel", "leaveSet", "revision", "dismissed"];
+const STATE_KEYS = ["settings", "places", "titleCats", "travel", "leaveSet", "revision", "dismissed", "durations"];
 let rootRef = null, stateCol = null, propsCol = null, storeReady = false, clearOld = false;
 const synced = {}, syncedProps = new Map();
 let saveTimer = null, saving = Promise.resolve();
@@ -872,7 +873,9 @@ function verifySessions(pings, visits) {
       const k = pl?.kind; if (STUDY_KINDS.has(k) || k === "home") good++; else bad++;
     }
     for (const v of visits) if (v.start < s.end && v.end > s.start && !alsoWork(v.place)) { if (STUDY_KINDS.has(v.place.kind) || v.place.kind === "home") good++; else if (AWAY_KINDS.has(v.place.kind)) bad++; }
-    if (good > bad) { s.status = "completed"; changed = true; } else if (bad > good) { s.status = "skipped"; changed = true; }
+    const guess = good > bad ? "completed" : bad > good ? "skipped" : null;
+    if (guess && s.guess !== guess) { s.guess = guess; changed = true; }
+    if (s.guess && s.end < Date.now() - 3 * DAY) { s.status = s.guess; changed = true; } // no answer for 3 days: go with the guess
   }
   if (changed) save();
 }
@@ -948,6 +951,53 @@ function renderCheckinTimes() {
     : `<div class="muted">No timed events in the next two weeks yet.</div>`;
 }
 
+
+// ---------------------------------------------------------------- study sessions: check-ins and real durations
+const subjKey = (t) => norm(String(t || "").replace(/^📚\s*Study:\s*/i, "").replace(/\(.*?\)/g, ""));
+/** How long to book a subject for: what it has actually taken you lately (plus a little), else your default. */
+function sessionMinutesFor(subject) {
+  const xs = S.durations[subjKey(subject)] || [], base = S.settings.sessionMinutes;
+  if (xs.length < 2) return base;
+  const med = [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  return Math.max(15, Math.min(base * 2, Math.ceil(med / 15) * 15)); // e.g. took 15 -> book 15, took 40 -> book 45
+}
+function learnDuration(subject, mins) { const k = subjKey(subject); if (k) S.durations[k] = (S.durations[k] || []).concat(Math.round(mins)).slice(-10); }
+function durationsText() {
+  return Object.entries(S.durations).filter(([, xs]) => xs.length >= 2)
+    .map(([k, xs]) => `${k} about ${[...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]} min`).join(", ");
+}
+const hashKey = (str) => { let h = 5381; for (const ch of str) h = ((h * 33) ^ ch.charCodeAt(0)) >>> 0; return h.toString(36); };
+/** Study blocks booked any way (Study tab, Ask Tempo, revision plans, another device) all get tracked. */
+function adoptStudyEvents() {
+  const now = Date.now(); let changed = false;
+  for (const e of events) {
+    if (!isTempoStudy(e) || e.allDay || e.holiday || e.start < now - 7 * DAY || e.start > now + 21 * DAY) continue;
+    const p = S.proposals.find((x) => x.eventId === e.id) || S.proposals.find((x) => !x.eventId && x.start === e.start && `📚 Study: ${x.subject}` === e.title);
+    if (!p) { S.proposals.push({ id: "ev-" + hashKey(e.key), start: e.start, end: e.end, subject: e.title.replace(/^📚\s*Study:\s*/, ""), reason: "", status: "accepted", eventId: e.id, calId: e.calId }); changed = true; continue; }
+    if (!p.eventId) { p.eventId = e.id; changed = true; }
+    if (p.calId !== e.calId) { p.calId = e.calId; changed = true; }
+    if (p.status === "accepted" && (p.start !== e.start || p.end !== e.end)) { p.start = e.start; p.end = e.end; changed = true; }
+  }
+  if (changed) save();
+}
+async function finishEarly(p, mins, btn) {
+  const was = { status: p.status, end: p.end }, newEnd = p.start + mins * MIN;
+  const ev = events.find((e) => e.id === p.eventId && (!p.calId || e.calId === p.calId));
+  await busy(btn, "Saving", async () => {
+    if (ev && newEnd < ev.end) {
+      try { await gcal("update_event", { calendarId: ev.calId, eventId: ev.id, endTime: localISO(newEnd) }); }
+      catch (e) { toast(connectorError(e), 5000); return; }
+    }
+    p.status = "completed"; p.end = Math.min(p.end, newEnd); p.actualMin = mins; learnDuration(p.subject, mins); save(); render();
+    const freed = Math.round((was.end - newEnd) / MIN);
+    pushUndo(`Done in ${mins} min${freed > 0 ? `, ${freed} min freed up` : ""}. Tempo will book ${p.subject.replace(/\s*\(.*?\)/g, "")} shorter next time.`, async () => {
+      if (ev && newEnd < was.end) await gcal("update_event", { calendarId: ev.calId, eventId: ev.id, endTime: localISO(was.end) });
+      p.status = was.status; p.end = was.end; delete p.actualMin; S.durations[subjKey(p.subject)]?.pop(); save(); await afterWrite();
+    });
+    afterWrite();
+  });
+}
+
 // ---------------------------------------------------------------- rendering
 /** With term dates saved, a class on a day outside every term is a holiday: hidden and never counted as busy. */
 function markHolidays() {
@@ -955,15 +1005,15 @@ function markHolidays() {
   for (const e of events) { e.holiday = has && !e.allDay && catOf(e) === "class" && !termFor(lp(e.start).key); e.free = !!e.transp || e.holiday; }
 }
 function render() {
-  markHolidays();
+  markHolidays(); adoptStudyEvents();
   buildModel();
   renderAgenda(); renderStudy(); renderInsights(); paintWeek(); renderCheckinTimes(); renderClashes(); renderReview(); paintAuto();
 }
 function evCard(e) {
-  const c = catOf(e), flex = isMovable(e);
-  return `<div class="ev ${c === "study" ? "study" : ""}" data-key="${esc(e.key)}" role="button" tabindex="0" aria-label="Edit ${esc(e.title)}"><div class="t">${e.allDay ? "All day" : `${fTime(e.start)}<br>${fTime(e.end)}`}</div>
+  const c = catOf(e), flex = isMovable(e), now = Date.now(), live = isTempoStudy(e) && e.start <= now && e.end > now && proposalFor(e);
+  return `<div class="ev ${c === "study" ? "study" : ""}" data-key="${esc(e.key)}"${live ? ` data-pid="${live.id}"` : ""} role="button" tabindex="0" aria-label="Edit ${esc(e.title)}"><div class="t">${e.allDay ? "All day" : `${fTime(e.start)}<br>${fTime(e.end)}`}</div>
     <div class="b"><div class="title">${COLORS[e.color] ? `<span class="cdot" style="background:${COLORS[e.color]}"></span>` : ""}${esc(e.title)}${c ? `<span class="chip">${esc(c.replace(/_/g, " "))}</span>` : ""}${flex ? `<span class="chip cal">movable</span>` : ""}</div>
-    <div class="meta">${e.location ? `${esc(e.location)} · ` : ""}${esc(e.cal)}</div></div></div>`;
+    <div class="meta">${e.location ? `${esc(e.location)} · ` : ""}${esc(e.cal)}</div>${live ? `<div class="row" style="margin-top:8px"><button class="btn small primary" data-act="done-now">I'm done</button></div>` : ""}</div></div>`;
 }
 function suggestCard(p, withDate) {
   return `<div class="ev suggest" data-pid="${p.id}"><div class="t">${withDate ? `${esc(fShort(p.start))}<br>` : ""}${fTime(p.start)}–${fTime(p.end)}</div>
@@ -974,10 +1024,14 @@ function renderAgenda() {
   const now = Date.now(), today = lp(now).key;
   const items = [...events.filter((e) => e.end > now - HOUR && e.start < now + 14 * DAY && !e.holiday).map((e) => ({ k: "e", t: e.start, e })),
     ...S.proposals.filter((p) => p.status === "proposed" && p.end > now).map((p) => ({ k: "p", t: p.start, p }))].sort((a, b) => a.t - b.t);
-  const checks = S.proposals.filter((p) => p.status === "accepted" && p.end <= now);
-  $("#checkins").innerHTML = checks.map((p) => `<div class="card notice" data-pid="${p.id}"><b>Did you study ${esc(p.subject.replace(/^📚 Study:\s*/, ""))}?</b>
-    <div class="muted small">${esc(slotLabel(p.start, p.end))}</div>
-    <div class="row" style="margin-top:8px"><button class="btn primary small" data-act="done">Yes</button><button class="btn small" data-act="skipped">I skipped it</button></div></div>`).join("");
+  const checks = S.proposals.filter((p) => p.status === "accepted" && p.end <= now).sort((a, b) => b.end - a.end).slice(0, 6);
+  $("#checkins").innerHTML = checks.map((p) => {
+    const len = Math.round((p.end - p.start) / MIN), opts = [15, 30, 45, 60, 90].filter((m) => m < len);
+    return `<div class="card notice" data-pid="${p.id}"><b>Did you study ${esc(p.subject.replace(/^📚 Study:\s*/, ""))}?</b>
+    <div class="muted small">${esc(slotLabel(p.start, p.end))}${p.guess ? ` · ${p.guess === "completed" ? "looks like you did, from where you were" : "looks like you were somewhere else"}` : ""}</div>
+    <div class="row" style="margin-top:8px"><button class="btn primary small" data-act="done">Yes, all of it</button>${opts.length ? `<button class="btn small" data-act="early">Finished early</button>` : ""}<button class="btn small" data-act="skipped">Skipped it</button></div>
+    <div class="row early-pick" hidden style="margin-top:8px"><span class="small muted">It took about</span>${opts.map((m) => `<button class="btn small" data-act="took" data-mins="${m}">${m} min</button>`).join("")}</div></div>`;
+  }).join("");
   if (!items.length) { $("#agenda").innerHTML = `<div class="empty">Nothing in the next two weeks.<br>Import a screenshot, or plan some study time.</div>`; return; }
   let html = sample && pendingPairs().length ? `<div class="row small muted" style="margin-top:12px">Some drive times between your events aren't known yet.<button class="link" id="est-drive">Estimate them</button></div>` : "";
   let cur = "", prev = null;
@@ -1076,10 +1130,18 @@ document.addEventListener("click", async (ev) => {
         await refresh(true);
       } catch (e) { toast(e?.code === "tool_error" ? "Google Calendar refused that event." : mcpMessage(e).replace(/<[^>]+>/g, ""), 5000); }
     });
+  } else if (act === "early") {
+    b.closest("[data-pid]").querySelector(".early-pick").hidden = false;
+  } else if (act === "took" || act === "done-now") {
+    await finishEarly(p, act === "took" ? +b.dataset.mins : Math.max(5, Math.round((Date.now() - p.start) / MIN)), b);
   } else if (act === "reject" || act === "done" || act === "skipped") {
     const was = p.status;
-    p.status = act === "reject" ? "rejected" : act === "done" ? "completed" : "skipped"; save(); render();
-    pushUndo(act === "reject" ? "Suggestion removed. Tempo will avoid that time." : act === "done" ? "Nice. Marked as done." : "Noted as skipped.", async () => { p.status = was; save(); render(); });
+    p.status = act === "reject" ? "rejected" : act === "done" ? "completed" : "skipped";
+    if (act === "done") learnDuration(p.subject, (p.end - p.start) / MIN);
+    save(); render();
+    pushUndo(act === "reject" ? "Suggestion removed. Tempo will avoid that time." : act === "done" ? "Nice. Marked as done." : "Noted as skipped.", async () => {
+      p.status = was; if (act === "done") S.durations[subjKey(p.subject)]?.pop(); save(); render();
+    });
   }
 });
 
@@ -1101,7 +1163,7 @@ $("#plan").addEventListener("click", (e) => busy(e.currentTarget, "Planning", as
       `prefer higher scores (score reflects when this student actually studies and avoids times they're usually busy); never pick overlapping slots; ` +
       `at most ${S.settings.maxPerDay} sessions per day; avoid the late evening before an early start. Address the student as "you".\n\n` +
       `Now: ${new Date().toLocaleString()} (${tz})\nLearned habits:\n${describe().join("\n")}\n` +
-      `Subjects: ${S.settings.subjects.join(", ") || "(infer from their classes)"}\nStudent's goals: ${$("#goals").value.trim() || "(none given)"}\n\n` +
+      `Subjects: ${S.settings.subjects.join(", ") || "(infer from their classes)"}\n` + (durationsText() ? `How long sessions actually take them: ${durationsText()}. Plan short subjects as short sessions.\n` : "") + `Student's goals: ${$("#goals").value.trim() || "(none given)"}\n\n` +
       `Upcoming calendar:\n${upcoming || "(empty)"}\n\nCandidate slots (index, time, score, signals):\n` +
       cand.map((c, i) => `${i}\t${slotLabel(c.start, c.end)}\tscore=${c.score.toFixed(2)}\t${c.why.join("; ")}`).join("\n") +
       `\n\nReply with only JSON: {"sessions":[{"candidate":index,"subject":"what to study","reason":"one short sentence on why this time suits you"}],"summary":"2 sentences on the plan"}`;
@@ -1111,7 +1173,7 @@ $("#plan").addEventListener("click", (e) => busy(e.currentTarget, "Planning", as
       const c = cand[s.candidate];
       if (!c || chosen.some((x) => c.start < x.end && c.end > x.start)) continue;
       chosen.push(c);
-      S.proposals.push({ id: newId(), start: c.start, end: c.end, subject: String(s.subject || "Study").slice(0, 80), reason: String(s.reason || "").slice(0, 200), status: "proposed" });
+      S.proposals.push({ id: newId(), start: c.start, end: Math.min(c.end, c.start + sessionMinutesFor(s.subject) * MIN), subject: String(s.subject || "Study").slice(0, 80), reason: String(s.reason || "").slice(0, 200), status: "proposed" });
     }
     $("#plan-summary").hidden = false; $("#plan-summary").textContent = plan?.summary || `${chosen.length} sessions suggested.`;
     save(); render();
@@ -1193,7 +1255,7 @@ async function undoLast() {
   catch (e) { toast(e?.code ? `Couldn't undo: ${connectorError(e)}` : `Couldn't undo. ${e?.message || ""}`, 6000); }
   finally { undoing = false; }
 }
-const snapshotS = () => JSON.stringify({ settings: S.settings, places: S.places, proposals: S.proposals, titleCats: S.titleCats, travel: S.travel, leaveSet: S.leaveSet, revision: S.revision, dismissed: S.dismissed });
+const snapshotS = () => JSON.stringify({ settings: S.settings, places: S.places, proposals: S.proposals, titleCats: S.titleCats, travel: S.travel, leaveSet: S.leaveSet, revision: S.revision, dismissed: S.dismissed, durations: S.durations });
 function restoreS(json) { Object.assign(S, JSON.parse(json)); save(); render(); }
 const idOf = (r) => r?.id ?? r?.event?.id ?? r?.eventId ?? null;
 function recreateInput(ev) {
@@ -1556,6 +1618,7 @@ $("#ed-form").addEventListener("submit", (e) => {
 $("#agenda").addEventListener("click", (e) => {
   const est = e.target.closest("#est-drive");
   if (est) { busy(est, "", async () => { try { const n = await estimateTravel(); render(); runAutomatic(); toast(n ? "Drive times updated" : "Nothing to estimate"); } catch (err) { toast(sampleMessage(err), 5000); } }); return; }
+  if (e.target.closest("[data-act]")) return; // a button on the card, not "open the editor"
   const card = e.target.closest(".ev[data-key]"); if (!card) return;
   const ev = events.find((x) => x.key === card.dataset.key); if (ev && !ev.key.startsWith("pending|")) openEditor(ev);
 });
@@ -1616,7 +1679,7 @@ async function syncRevision() {
   const targets = events.filter((e) => examLike(e) && !isTempoStudy(e) && e.start > now + 36 * HOUR && e.start < now + 28 * DAY && !S.revision[e.key]).slice(0, 3);
   for (const ex of targets) {
     const exam = isExamDay(ex), offsets = (exam ? [10, 6, 3, 1] : [7, 4, 2]).filter((d) => ex.start - d * DAY > now + HOUR);
-    const subj = subjectOf(ex.title), dur = S.settings.sessionMinutes * MIN, placed = [];
+    const subj = subjectOf(ex.title), dur = sessionMinutesFor(subj) * MIN, placed = [];
     for (const d of offsets) {
       const center = (ex.allDay ? ex.start + 16 * HOUR : ex.start) - d * DAY; // all-day exams: aim for after school
       const slot = findSlots({ dur, from: center - 18 * HOUR, to: Math.min(center + 18 * HOUR, ex.start - 2 * HOUR), near: center, limit: 1,
